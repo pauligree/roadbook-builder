@@ -88,6 +88,13 @@ python -m webapp.server
   tile count and approximate print ppi for the chosen zoom.
 - **Final PDF** tab: the rendered roadbook, once you press *Render roadbook*.
 
+**Desktop launcher.** `scripts/make_desktop_app.sh` creates
+`~/Desktop/Roadbook Builder.app`: double-click starts the server in the
+background (if not already running; log in `work/server.log`) and opens the
+app in your default browser. First launch may ask to allow access to the
+Documents folder — click *Allow*. Stop the server with
+`scripts/launch.sh --stop`. Re-run the script if you move the project folder.
+
 GPX files are listed from `input/` and `input-TORX/`; uploads go to `input/`.
 Renders run one at a time and write to `output/` exactly like the CLI.
 
