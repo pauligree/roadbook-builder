@@ -1,0 +1,10 @@
+gpxpy>=1.6.2
+numpy>=1.26
+matplotlib>=3.8
+Pillow>=10.0
+requests>=2.31
+PyMuPDF>=1.24
+# web app (webapp/)
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9

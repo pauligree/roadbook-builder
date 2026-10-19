@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+work/
+output/
+!work/.gitkeep
+!output/.gitkeep
+.DS_Store
+input/*
+input-TORX/*
+!input/.gitkeep
+!input-TORX/.gitkeep

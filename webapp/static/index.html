@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Roadbook Builder</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Roadbook Builder <span class="tag">mockup</span></div>
+    <div id="summary" class="summary"></div>
+  </header>
+
+  <main class="layout">
+    <!-- LEFT: GPX files -->
+    <aside class="pane files">
+      <div class="pane-title">GPX tracks</div>
+      <label id="drop" class="drop">
+        <input id="upload" type="file" accept=".gpx" multiple hidden>
+        Drop .gpx here or <u>browse</u>
+      </label>
+      <div id="fileList" class="file-list"></div>
+    </aside>
+
+    <!-- CENTER: preview -->
+    <section class="pane preview">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-view="overview">Overview</button>
+        <button class="tab" data-view="page">Page layout</button>
+        <button class="tab" data-view="final">Final PDF</button>
+        <span class="spacer"></span>
+        <span id="pageNav" class="page-nav">
+          <button id="prevPage" title="Previous page">‹</button>
+          <span id="pageLabel">–</span>
+          <button id="nextPage" title="Next page">›</button>
+        </span>
+      </div>
+      <div id="stage" class="stage">
+        <canvas id="canvas"></canvas>
+        <iframe id="pdfFrame" title="Final roadbook PDF" hidden></iframe>
+        <div id="empty" class="empty">Select a GPX track on the left.</div>
+      </div>
+      <div id="strip" class="strip"></div>
+    </section>
+
+    <!-- RIGHT: options -->
+    <aside class="pane options">
+      <div class="pane-title">Options</div>
+      <form id="opts" autocomplete="off">
+        <label class="field">
+          <span>Pages <output id="pagesOut">4</output></span>
+          <input name="pages" type="range" min="1" max="12" value="4">
+          <small id="pagesNote" class="note"></small>
+        </label>
+
+        <label class="field">
+          <span>Tile zoom <output id="zoomOut">13</output></span>
+          <input name="zoom" type="range" min="10" max="17" value="13">
+          <small id="zoomNote" class="note"></small>
+        </label>
+
+        <label class="field">
+          <span>Map provider</span>
+          <select name="provider"></select>
+        </label>
+        <div id="keyFields" hidden>
+          <label class="field">
+            <span>API key</span>
+            <input name="api_key" type="password" placeholder="or set env var on server">
+          </label>
+          <label class="field">
+            <span>Style / map ID</span>
+            <input name="style_id" type="text">
+          </label>
+        </div>
+
+        <label class="field">
+          <span>Race title</span>
+          <input name="race_title" type="text" placeholder="auto from filename">
+        </label>
+
+        <label class="field">
+          <span>Waypoint radius <output id="radiusOut">60</output> m</span>
+          <input name="waypoint_radius_m" type="range" min="10" max="300" step="10" value="60">
+        </label>
+      </form>
+
+      <button id="renderBtn" class="primary" disabled>Render roadbook</button>
+      <div id="progress" class="progress" hidden>
+        <div class="bar"><div id="barFill"></div></div>
+        <div id="progressMsg" class="note"></div>
+      </div>
+
+      <div class="pane-title sub">Recent output</div>
+      <div id="outputList" class="output-list"></div>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
