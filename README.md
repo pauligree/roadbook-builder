@@ -263,7 +263,9 @@ Two kinds of table page, both on by default:
 
 - **After each map page** (`--no-part-tables` to turn off): that part's
   points, with the map page's header repeated (title, sector line +
-  subtitle, stats).
+  subtitle, stats). When a page edge isn't at a waypoint (equal-distance
+  split), italic *Part N start* / *Part N end* rows mark it, so the rows
+  chain from the page start to the page end.
 - **Final table** (`--no-final-table`): every point on the track, with a
   header covering the whole track.
 

@@ -540,9 +540,9 @@ function marker(x, y, r, fill) {
   ctx.lineWidth = Math.max(1, r * 0.3); ctx.strokeStyle = "#fff"; ctx.stroke();
 }
 
-function label(text, x, y, { size = 11, color = "#1a1a2e", bold = false, align = "left", bg = "rgba(255,255,255,.78)", mono = false, font } = {}) {
-  ctx.font = font !== undefined ? fontCss(size, bold, font)
-    : `${bold ? "700 " : ""}${size}px ${mono ? "ui-monospace, Menlo, monospace" : "-apple-system, Helvetica, sans-serif"}`;
+function label(text, x, y, { size = 11, color = "#1a1a2e", bold = false, align = "left", bg = "rgba(255,255,255,.78)", mono = false, font, italic = false } = {}) {
+  ctx.font = (italic ? "italic " : "") + (font !== undefined ? fontCss(size, bold, font)
+    : `${bold ? "700 " : ""}${size}px ${mono ? "ui-monospace, Menlo, monospace" : "-apple-system, Helvetica, sans-serif"}`);
   const lines = String(text).split("\n");
   const w = Math.max(...lines.map((l) => ctx.measureText(l).width));
   const lh = size * 1.18, h = lh * lines.length;
@@ -885,7 +885,7 @@ function drawTable(rows, box, pt) {
     TABLE_COLUMNS.forEach(([key, , , dec], i) => {
       const v = r[key];
       const text = dec === null ? v : v === null ? "–" : v.toFixed(dec);
-      cell(text, i, y + rowH / 2 - size * 1.18 / 2, { size, bold: i < 2, font });
+      cell(text, i, y + rowH / 2 - size * 1.18 / 2, { size, bold: i < 2, font, italic: r.boundary, color: r.boundary ? "#5a6170" : "#1a1a2e" });
     });
   });
   const yEnd = box.y0 + headH + rows.length * rowH;

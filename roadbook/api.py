@@ -26,7 +26,7 @@ import numpy as np
 from roadbook import fetch_basemap, parse_gpx, run_pipeline
 from roadbook.render_pages import (
     GRADIENT_COLORS, GRADIENT_VMAX_CLIP, HEIGHT_RATIOS, PAGE_SIZE_IN,
-    build_sheets, clean_name, compute_gradient, page_subtitle, table_header, waypoint_table,
+    build_sheets, clean_name, compute_gradient, page_subtitle, table_header,
 )
 
 PREVIEW_MAX_POINTS = 3000
@@ -185,7 +185,7 @@ def analyze(gpx_path, opts: RenderOptions):
     # rows/headers for the preview, see render_pages.build_sheets
     edges = [p["d0"] for p in pages] + [pages[-1]["d1"]]
     poi_tuples = [(p["km"], p["name"], p["lat"], p["lon"], p["ele"]) for p in pois]
-    sheets = build_sheets(waypoint_table(data, poi_tuples), edges,
+    sheets = build_sheets(data, poi_tuples, edges,
                           part_tables=opts.part_tables, final_table=opts.final_table)
     for sh in sheets:
         if sh["kind"] != "map":

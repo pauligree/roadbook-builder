@@ -548,12 +548,14 @@ def merge_close_pois(pois, within_km=0.3):
     return merged
 
 
-def waypoint_table(data, pois):
+def waypoint_table(data, pois, extra=()):
     """Every point along the track (start and finish always included), as
-    dicts with name, km, and the distance / D+ / D- to the previous and next
-    point and from the start. "Previous" and "next" run along the whole
-    track, also across page breaks. D+/D- are raw elevation-difference
-    sums, the same as the header stats."""
+    dicts with name, km, boundary, and the distance / D+ / D- to the
+    previous and next point and from the start. "Previous" and "next" run
+    along the whole track, also across page breaks. `extra` adds (km, name)
+    points — page start/end rows, flagged boundary=True — unless a point
+    already sits within 0.3 km. D+/D- are raw elevation-difference sums,
+    the same as the header stats."""
     dist_km = data["dist"] / 1000.0
     total = float(data["total_dist_km"])
     d_ele = np.diff(data["eles"])
@@ -561,21 +563,25 @@ def waypoint_table(data, pois):
     cum_down = np.concatenate([[0.0], np.cumsum(np.clip(-d_ele, 0, None))])
 
     # a waypoint at the very start/finish *is* that end of the track
-    points = [(0.0 if p[0] <= 0.3 else total if p[0] >= total - 0.3 else float(p[0]), p[1])
+    points = [(0.0 if p[0] <= 0.3 else total if p[0] >= total - 0.3 else float(p[0]), p[1], False)
               for p in merge_close_pois(pois)]
     if not points or points[0][0] > 0.3:
-        points.insert(0, (0.0, data["start_name"] or "Start"))
+        points.insert(0, (0.0, data["start_name"] or "Start", False))
     if points[-1][0] < total - 0.3:
-        points.append((total, data["end_name"] or "Finish"))
+        points.append((total, data["end_name"] or "Finish", False))
+    for k, name in extra:
+        if all(abs(p[0] - k) > 0.3 for p in points):
+            points.append((float(k), name, True))
+    points.sort(key=lambda p: p[0])
 
     km = [p[0] for p in points]
     up = np.interp(km, dist_km, cum_up).tolist()
     down = np.interp(km, dist_km, cum_down).tolist()
     rows = []
-    for i, (k, name) in enumerate(points):
+    for i, (k, name, boundary) in enumerate(points):
         prev_i, next_i = (i - 1 if i else None), (i + 1 if i + 1 < len(points) else None)
         rows.append(dict(
-            name=name, km=k,
+            name=name, km=k, boundary=boundary,
             dkm_prev=None if prev_i is None else k - km[prev_i],
             up_prev=None if prev_i is None else up[i] - up[prev_i],
             down_prev=None if prev_i is None else down[i] - down[prev_i],
@@ -591,22 +597,28 @@ def _chunks(rows):
     return [rows[i:i + n] for i in range(0, len(rows), n)] or [[]]
 
 
-def build_sheets(rows, edges, part_tables=True, final_table=True):
+def build_sheets(data, pois, edges, part_tables=True, final_table=True):
     """The document's page sequence: each map page, optionally followed by
     its part table, then optionally the final table of all points. Each
     entry is a dict(kind="map"|"part"|"final", page, rows, chunk, n_chunks);
     tables longer than one page are split into chunks. A sheet's position
-    in this list + 1 is its page number (footer)."""
+    in this list + 1 is its page number (footer). Part tables also get
+    "Part N start/end" rows at the page edges (when no waypoint is there),
+    so their rows chain from the page start to the page end."""
+    n_parts = len(edges) - 1
     sheets = []
-    for p in range(len(edges) - 1):
+    for p in range(n_parts):
         sheets.append(dict(kind="map", page=p))
         if part_tables:
-            part = [r for r in rows if edges[p] - 0.05 <= r["km"] <= edges[p + 1] + 0.05]
+            d0, d1 = float(edges[p]), float(edges[p + 1])
+            extra = ([(d0, f"Part {p + 1} start")] if p > 0 else []) + \
+                    ([(d1, f"Part {p + 1} end")] if p < n_parts - 1 else [])
+            part = [r for r in waypoint_table(data, pois, extra) if d0 - 0.05 <= r["km"] <= d1 + 0.05]
             chunks = _chunks(part)
             sheets += [dict(kind="part", page=p, rows=c, chunk=i, n_chunks=len(chunks))
                        for i, c in enumerate(chunks)]
     if final_table:
-        chunks = _chunks(rows)
+        chunks = _chunks(waypoint_table(data, pois))
         sheets += [dict(kind="final", page=None, rows=c, chunk=i, n_chunks=len(chunks))
                    for i, c in enumerate(chunks)]
     return sheets
@@ -699,7 +711,9 @@ def build_table_page(num, ctx):
                 text = "–" if v is None else fmt.format(v)
             left = key == "name"
             ax.text(x0 + pad if left else x1 - pad, y1 - row_h / 2, text, fontsize=size,
-                    ha="left" if left else "right", va="center", color="#1a1a2e",
+                    ha="left" if left else "right", va="center",
+                    color="#5a6170" if r["boundary"] else "#1a1a2e",
+                    fontstyle="italic" if r["boundary"] else "normal",
                     fontweight="bold" if key in ("name", "km") else "normal", **font_kw)
     # light separators: between the "previous", "next" and "from start" groups
     y_end = 1 - head_h - len(rows) * row_h
@@ -772,7 +786,7 @@ def main():
 
     ctx = dict(
         data=data, n_pages=n_pages, edges=edges, custom_split=custom_split, grad_all=grad_all,
-        sheets=build_sheets(waypoint_table(data, pois_all), edges,
+        sheets=build_sheets(data, pois_all, edges,
                             part_tables=not (args.no_tables or args.no_part_tables),
                             final_table=not (args.no_tables or args.no_final_table)),
         cmap=cmap, norm=norm, basemap_bounds=basemap_bounds, basemap_imgs=basemap_imgs,
