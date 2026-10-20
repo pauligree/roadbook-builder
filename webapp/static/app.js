@@ -13,6 +13,7 @@ const state = {
   data: null,        // last /api/analyze result
   view: "overview",  // overview | page | final
   page: 0,
+  sheetIdx: 0,       // page view: index into data.sheets (maps, part tables, final table)
   hoverPage: -1,
   job: null,
 };
@@ -31,6 +32,8 @@ function readOptions() {
   for (const [k, v] of new FormData(form).entries()) if (!isStyleField(k)) o[k] = v;
   o.pages = +form.elements.pages.value;  // read directly: disabled fields skip FormData
   o.zoom = +o.zoom; o.waypoint_radius_m = +o.waypoint_radius_m;
+  o.part_tables = form.elements.part_tables.checked;
+  o.final_table = form.elements.final_table.checked;
   // custom split, once this file has one (until then the equal split
   // is analyzed and seeds it, see renderSplitList)
   if (o.split_mode === "waypoints" && splitStore[state.file]) {
@@ -122,14 +125,19 @@ function restoreOptions() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
     if (!saved._v) delete saved.provider;  // saved before the server-chosen default existed
-    for (const [k, v] of Object.entries(saved)) if (form.elements[k] && k !== "api_key") form.elements[k].value = v;
+    for (const [k, v] of Object.entries(saved)) {
+      const el = form.elements[k];
+      if (!el || k === "api_key") continue;
+      if (el.type === "checkbox") el.checked = !!v; else el.value = v;
+    }
   } catch (_) { /* storage unavailable: defaults are fine */ }
 }
 
 function saveOptions() {
   try {
     const { api_key, ...rest } = Object.fromEntries(new FormData(form).entries());
-    localStorage.setItem(STORE_KEY, JSON.stringify({ ...rest, _v: 2 }));
+    localStorage.setItem(STORE_KEY, JSON.stringify({ ...rest, part_tables: form.elements.part_tables.checked,
+      final_table: form.elements.final_table.checked, _v: 2 }));
   } catch (_) {}
 }
 
@@ -205,8 +213,12 @@ async function runAnalyze() {
   try {
     const data = await api("/api/analyze", { file: state.file, options: readOptions() });
     if (seq !== analyzeSeq) return; // stale response
+    // stay on the same kind of sheet for the same part after re-analyzing
+    const prev = state.data?.sheets?.[state.sheetIdx];
     state.data = data;
     state.page = Math.min(state.page, data.n_pages - 1);
+    const same = prev && data.sheets.findIndex((s) => s.kind === prev.kind && s.page === (prev.kind === "final" ? null : state.page) && s.chunk === prev.chunk);
+    state.sheetIdx = same >= 0 ? same : mapSheetIdx(state.page);
     $("renderBtn").disabled = !!state.job;
     syncOptionLabels();
     updateLabelCount();
@@ -353,25 +365,50 @@ function renderSummary() {
     `D- ${Math.round(s.loss)} m · ${d.pois.length} waypoints · ${d.n_pages} page${d.n_pages > 1 ? "s" : ""}`;
 }
 
+const mapSheetIdx = (page) => Math.max(0, state.data.sheets.findIndex((s) => s.kind === "map" && s.page === page));
+const currentSheet = () => state.data.sheets[Math.min(state.sheetIdx, state.data.sheets.length - 1)];
+
 function renderStrip() {
   const strip = $("strip");
   strip.innerHTML = "";
   const d = state.data; if (!d) return;
-  d.pages.forEach((p, i) => {
+  const cur = currentSheet();
+  const chip = (html, active, onclick) => {
     const c = document.createElement("button");
-    c.className = "chip" + (i === state.page ? " active" : "");
-    c.innerHTML = `<b>Part ${p.page}</b><span>${p.d0.toFixed(1)}–${p.d1.toFixed(1)} km · +${Math.round(p.gain)} m</span>`;
-    c.onclick = () => { setPage(i); if (state.view === "overview") setView("page"); };
+    c.className = "chip" + (active ? " active" : "");
+    c.innerHTML = html; c.onclick = onclick;
+    strip.appendChild(c);
+    return c;
+  };
+  d.pages.forEach((p, i) => {
+    const c = chip(`<b>Part ${p.page}</b><span>${p.d0.toFixed(1)}–${p.d1.toFixed(1)} km · +${Math.round(p.gain)} m</span>`,
+      cur.kind !== "final" && i === state.page,
+      () => { setPage(i); if (state.view === "overview") setView("page"); });
     c.onmouseenter = () => { state.hoverPage = i; if (state.view === "overview") draw(); };
     c.onmouseleave = () => { state.hoverPage = -1; if (state.view === "overview") draw(); };
-    strip.appendChild(c);
   });
-  $("pageLabel").textContent = `${state.page + 1} / ${d.n_pages}`;
+  const fin = d.sheets.findIndex((s) => s.kind === "final");
+  if (fin >= 0) {
+    chip(`<b>All points</b><span>waypoint table · ${d.sheets.filter((s) => s.kind === "final").reduce((a, s) => a + s.rows.length, 0)} rows</span>`,
+      cur.kind === "final", () => { setView("page"); setSheetIdx(fin); });
+  }
+  $("pageLabel").textContent = `${state.sheetIdx + 1} / ${d.sheets.length}`;
 }
 
+// a part: jump to its map page
 function setPage(i) {
   const d = state.data; if (!d) return;
   state.page = Math.max(0, Math.min(d.n_pages - 1, i));
+  state.sheetIdx = mapSheetIdx(state.page);
+  renderStrip(); updateNotes(); draw();
+}
+
+// any sheet, in document order (‹ › and arrow keys)
+function setSheetIdx(i) {
+  const d = state.data; if (!d) return;
+  state.sheetIdx = Math.max(0, Math.min(d.sheets.length - 1, i));
+  const s = currentSheet();
+  if (s.page !== null) state.page = s.page;
   renderStrip(); updateNotes(); draw();
 }
 
@@ -626,13 +663,32 @@ function drawPage(W, H) {
   const m = d.meta;
   label(m.race_title, hx, cellY(hr, 1.0), { size: pt(13), bold: true, bg: null });
   label(`Sector ${m.sector_code}: ${m.start_name} -> ${m.end_name}`, hx, cellY(hr, 0.40), { size: pt(10.5), bold: true, color: "#16213e", bg: null });
-  label(pg.subtitle, hx1, cellY(hr, 0.40), { size: pt(10.5), bold: true, color: "#2f3e8a", bg: null, align: "right" });
-  label(`Part ${pg.page}/${d.n_pages} (${pg.d0.toFixed(1)}-${pg.d1.toFixed(1)} km)  |  Distance ${pg.length_km.toFixed(1)} km  |  ` +
-        `D+ ${Math.round(pg.gain)} m  |  D- ${Math.round(pg.loss)} m  |  Elev min/max ${Math.round(pg.min_ele)}/${Math.round(pg.max_ele)} m`,
+  const sheet = currentSheet(), tableSheet = sheet.kind !== "map";
+  label(tableSheet ? sheet.subtitle : pg.subtitle, hx1, cellY(hr, 0.40), { size: pt(10.5), bold: true, color: "#2f3e8a", bg: null, align: "right" });
+  label(tableSheet ? sheet.stats
+        : `Part ${pg.page}/${d.n_pages} (${pg.d0.toFixed(1)}-${pg.d1.toFixed(1)} km)  |  Distance ${pg.length_km.toFixed(1)} km  |  ` +
+          `D+ ${Math.round(pg.gain)} m  |  D- ${Math.round(pg.loss)} m  |  Elev min/max ${Math.round(pg.min_ele)}/${Math.round(pg.max_ele)} m`,
         hx, cellY(hr, -0.05), { size: pt(8), color: "#333", bg: null, mono: true });
   if (m.version || m.update_tag) label(`Rev. ${m.version} - ${m.update_tag}`, hx1, cellY(hr, 1.0), { size: pt(7.5), color: "#888", bg: null, align: "right" });
   ctx.strokeStyle = "#1a1a2e"; ctx.lineWidth = pt(1.2);
   ctx.beginPath(); ctx.moveTo(hx, cellY(hr, -0.28)); ctx.lineTo(hx1, cellY(hr, -0.28)); ctx.stroke();
+
+  // footer (render_pages.draw_footer): map pages first, then the table page(s)
+  const footer = (num) => {
+    const fr = rows[3];
+    const total = d.sheets.length;
+    ctx.strokeStyle = "#1a1a2e"; ctx.lineWidth = pt(0.7);
+    ctx.beginPath(); ctx.moveTo(FX(fr.x0), FY(fr.y1)); ctx.lineTo(FX(fr.x1), FY(fr.y1)); ctx.stroke();
+    label(`Roadbook - Sector ${m.sector_code} - Page ${num} of ${total}`, FX(fr.x0), cellY(fr, 0.85), { size: pt(7.5), color: "#666", bg: null });
+    label(`Generated ${new Date().toISOString().slice(0, 10)} - GPX: ${m.start_name} - ${m.end_name} (${m.update_tag})`,
+          FX(fr.x1), cellY(fr, 0.85), { size: pt(7.5), color: "#666", bg: null, align: "right" });
+  };
+
+  if (tableSheet) {
+    drawTable(sheet.rows, { x0: FX(rows[1].x0), x1: FX(rows[1].x1), y0: FY(rows[1].y1), y1: FY(rows[2].y0) }, pt);
+    footer(state.sheetIdx + 1);
+    return;
+  }
 
   // map panel
   const mb = mapBox(pg);
@@ -790,13 +846,52 @@ function drawPage(W, H) {
   ctx.textAlign = "center"; ctx.textBaseline = "top";
   ctx.fillText(pg.d0.toFixed(1), ex, ey + eh + 3); ctx.fillText(`${pg.d1.toFixed(1)} km`, ex + ew, ey + eh + 3);
 
-  // footer
-  const fr = rows[3];
-  ctx.strokeStyle = "#1a1a2e"; ctx.lineWidth = pt(0.7);
-  ctx.beginPath(); ctx.moveTo(FX(fr.x0), FY(fr.y1)); ctx.lineTo(FX(fr.x1), FY(fr.y1)); ctx.stroke();
-  label(`Roadbook - Sector ${m.sector_code} - Page ${pg.page} of ${d.n_pages}`, FX(fr.x0), cellY(fr, 0.85), { size: pt(7.5), color: "#666", bg: null });
-  label(`Generated ${new Date().toISOString().slice(0, 10)} - GPX: ${m.start_name} - ${m.end_name} (${m.update_tag})`,
-        FX(fr.x1), cellY(fr, 0.85), { size: pt(7.5), color: "#666", bg: null, align: "right" });
+  footer(state.sheetIdx + 1);
+}
+
+// Mirrors render_pages.TABLE_COLUMNS / build_table_page.
+const TABLE_COLUMNS = [
+  ["name", "Point", 0.31, null], ["km", "km\nfrom start", 0.085, 1], ["dkm_prev", "km from\nprevious", 0.085, 1],
+  ["up_prev", "D+ from\nprevious", 0.075, 0], ["down_prev", "D- from\nprevious", 0.075, 0],
+  ["up_next", "D+ to\nnext", 0.075, 0], ["down_next", "D- to\nnext", 0.075, 0],
+  ["up_total", "D+ from\nstart", 0.11, 0], ["down_total", "D- from\nstart", 0.11, 0],
+];
+
+function drawTable(rows, box, pt) {
+  const W = box.x1 - box.x0, H = box.y1 - box.y0;
+  const headH = pt(0.42 * 72);
+  const rowH = Math.min(pt(0.26 * 72), (H - headH - H * 0.01) / Math.max(rows.length, 1));
+  const size = Math.max(pt(5), Math.min(pt(8.5), rowH * 0.55));
+  const font = state.style.label_font || "";
+  const xs = [0]; for (const c of TABLE_COLUMNS) xs.push(xs[xs.length - 1] + c[2]);
+  const X = (f) => box.x0 + f * W, pad = 0.006;
+  const cell = (text, i, y, opts) => {
+    const left = i === 0;
+    ctx.save(); ctx.beginPath(); ctx.rect(X(xs[i]), y - rowH, X(xs[i + 1]) - X(xs[i]), rowH * 2); ctx.clip();
+    label(text, left ? X(xs[i] + pad) : X(xs[i + 1] - pad), y, { bg: null, align: left ? "left" : "right", ...opts });
+    ctx.restore();
+  };
+
+  ctx.fillStyle = "#1a1a2e"; ctx.fillRect(box.x0, box.y0, W, headH);
+  TABLE_COLUMNS.forEach(([, head], i) => {
+    const n = head.split("\n").length, sz = pt(7.5);
+    cell(head, i, box.y0 + headH / 2 - n * sz * 1.18 / 2, { size: sz, bold: true, color: "#fff" });
+  });
+  rows.forEach((r, j) => {
+    const y = box.y0 + headH + j * rowH;
+    if (j % 2) { ctx.fillStyle = "#f0f2f6"; ctx.fillRect(box.x0, y, W, rowH); }
+    ctx.strokeStyle = "#d5d9e0"; ctx.lineWidth = pt(0.4);
+    ctx.beginPath(); ctx.moveTo(box.x0, y + rowH); ctx.lineTo(box.x1, y + rowH); ctx.stroke();
+    TABLE_COLUMNS.forEach(([key, , , dec], i) => {
+      const v = r[key];
+      const text = dec === null ? v : v === null ? "–" : v.toFixed(dec);
+      cell(text, i, y + rowH / 2 - size * 1.18 / 2, { size, bold: i < 2, font });
+    });
+  });
+  const yEnd = box.y0 + headH + rows.length * rowH;
+  ctx.strokeStyle = "#b8bec9"; ctx.lineWidth = pt(0.5);
+  for (const k of [2, 5, 7]) { ctx.beginPath(); ctx.moveTo(X(xs[k]), box.y0); ctx.lineTo(X(xs[k]), yEnd); ctx.stroke(); }
+  if (!rows.length) label("No waypoints.", box.x0 + W / 2, box.y0 + headH + H * 0.05, { size: pt(9), color: "#666", bg: null, align: "center" });
 }
 
 // ---- final PDF + render jobs ------------------------------------------
@@ -871,14 +966,15 @@ form.addEventListener("input", (e) => {
   scheduleAnalyze(name === "race_title" ? 300 : 120);
 });
 $("renderBtn").onclick = startRender;
-$("prevPage").onclick = () => setPage(state.page - 1);
-$("nextPage").onclick = () => setPage(state.page + 1);
+$("prevPage").onclick = () => setSheetIdx(state.sheetIdx - 1);
+$("nextPage").onclick = () => setSheetIdx(state.sheetIdx + 1);
 for (const t of document.querySelectorAll(".tab")) t.onclick = () => setView(t.dataset.view);
 window.addEventListener("resize", draw);
 document.addEventListener("keydown", (e) => {
   if (e.target.matches("input, select")) return;
-  if (e.key === "ArrowLeft") setPage(state.page - 1);
-  if (e.key === "ArrowRight") setPage(state.page + 1);
+  if (state.view !== "page") return;
+  if (e.key === "ArrowLeft") setSheetIdx(state.sheetIdx - 1);
+  if (e.key === "ArrowRight") setSheetIdx(state.sheetIdx + 1);
 });
 
 // ---- canvas interaction: overview page boxes, draggable page labels ------

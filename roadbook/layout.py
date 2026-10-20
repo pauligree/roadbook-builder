@@ -23,3 +23,25 @@ def map_panel_aspect():
     """width / height of the map panel."""
     w, h = map_panel_size_in()
     return w / h
+
+
+def body_height_in():
+    """Height in inches from the top of the map cell to the bottom of the
+    profile cell — the area the waypoint-table page uses for its table."""
+    n = len(HEIGHT_RATIOS)
+    tot_h = (GRID["top"] - GRID["bottom"]) * PAGE_SIZE_IN[1]
+    cell_h = tot_h / (n + GRID["hspace"] * (n - 1))
+    return (HEIGHT_RATIOS[1] + HEIGHT_RATIOS[2]) * cell_h * n / sum(HEIGHT_RATIOS) + GRID["hspace"] * cell_h
+
+
+# waypoint table geometry (inches / points), shared by render_pages and
+# the web preview
+TABLE_HEAD_IN = 0.42
+TABLE_ROW_IN = 0.26          # row height when the list is short
+TABLE_FONT_PT = (5.0, 8.5)   # smallest / largest row font
+
+
+def table_rows_per_page():
+    """Most rows one table page holds at the smallest font."""
+    min_row_in = TABLE_FONT_PT[0] / 0.55 / 72
+    return max(1, int((body_height_in() * 0.99 - TABLE_HEAD_IN) / min_row_in))

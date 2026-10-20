@@ -198,3 +198,6 @@ input[type=range]:disabled{opacity:.4}
   border-color: var(--err); background: var(--err); color: #fff;
 }
 .del.failed { border-color: var(--err); color: var(--err); }
+
+.field.check { display: flex; align-items: center; gap: 8px; }
+.field.check > span { margin: 0; font-weight: 500; }

@@ -257,6 +257,25 @@ Rif. Deffeyes`) for a custom one. Either way, each page's map is sized to fill t
 whole map panel (no blank bands) — the basemap box is grown to the panel's
 proportions around the page's track.
 
+### Waypoint tables
+
+Two kinds of table page, both on by default:
+
+- **After each map page** (`--no-part-tables` to turn off): that part's
+  points, with the map page's header repeated (title, sector line +
+  subtitle, stats).
+- **Final table** (`--no-final-table`): every point on the track, with a
+  header covering the whole track.
+
+Columns: point name, km from start, km / D+ / D- from the previous point,
+D+ / D- to the next point, D+ / D- from the start. Rows are the GPX
+waypoints plus track start and finish; "previous" and "next" run along the
+whole track, also across part breaks. D+/D- use the same elevation sums as
+the header stats. A list longer than ~74 points continues on another page.
+Table pages carry no basemap. Web app: two checkboxes under Options; in
+*Page layout*, ‹ › step through every page in print order and the
+*All points* chip jumps to the final table.
+
 ### Style file (`--style`)
 
 Label font, line widths, colour scale and hand-placed label positions can

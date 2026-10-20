@@ -49,11 +49,17 @@ def _place_sector_pages(out, ocg_raster, ocg_vector, vector_path, basemap_dir):
         map_rects = json.load(f)  # {"1": {"x0":.., "y0":.., "x1":.., "y1":..}, ...} (figure fractions)
 
     for i in range(len(vector_doc)):
-        pnum = i + 1
         vrect = vector_doc[i].rect
         page = out.new_page(width=vrect.width, height=vrect.height)
 
-        frac = map_rects[str(pnum)]
+        # keyed by vector page; pages without an entry (waypoint tables)
+        # have no basemap. Older map_rects.json files have no "basemap" key
+        # and one map per vector page.
+        frac = map_rects.get(str(i + 1))
+        if frac is None:
+            page.show_pdf_page(vrect, vector_doc, i, oc=ocg_vector)
+            continue
+        pnum = frac.get("basemap", i + 1)
         # matplotlib figure fractions have a bottom-left origin (y up);
         # fitz page rects have a top-left origin (y down) — flip y here.
         img_rect = fitz.Rect(

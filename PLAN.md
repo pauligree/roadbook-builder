@@ -43,6 +43,7 @@ render service in Phase 2 option A.
     panel, track segment, POI labels, profile, header/footer text, tile count
 - [x] Render button → progress → final PDF in browser + download
 - [x] Uploads (drag-drop), page strip, option persistence
+- [x] Waypoint tables: one after each map page + a final one with all points (distance, D+/D- prev/next/from start)
 - [x] Map fills the whole map panel (basemap box grown to the panel's aspect, mosaic cropped to it)
 - [x] Page split: equal distance, or custom — end pages at chosen GPX waypoints
 - [x] Style panel: label font, track/profile line width, editable colour scale

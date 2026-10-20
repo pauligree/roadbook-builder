@@ -118,6 +118,10 @@ def process_one(gpx_path: Path, args, out_override: Path = None, progress=None) 
            "--pages", str(n_pages)]
     if args.race_title:
         cmd += ["--race-title", args.race_title]
+    if not getattr(args, "part_tables", True):
+        cmd += ["--no-part-tables"]
+    if not getattr(args, "final_table", True):
+        cmd += ["--no-final-table"]
     style = getattr(args, "style", None)
     if style:
         # a dict from the web app, or a JSON path from --style
@@ -151,6 +155,10 @@ def main():
     ap.add_argument("--splits", type=fetch_basemap.parse_splits, default=None,
                      help="Comma-separated km where pages end, e.g. 12.4,31.0 (overrides --pages: "
                           "pages = number of splits + 1). Default: equal-distance split.")
+    ap.add_argument("--no-part-tables", dest="part_tables", action="store_false",
+                     help="Don't add a waypoint-table page after each map page")
+    ap.add_argument("--no-final-table", dest="final_table", action="store_false",
+                     help="Don't add the final waypoint table of all points")
     ap.add_argument("--api-key", default=None,
                      help="API key/access token for --provider mapbox or maptiler")
     ap.add_argument("--mapbox-style", default=None, help="Mapbox style ID (default: mapbox/outdoors-v12)")

@@ -26,7 +26,7 @@ import numpy as np
 from roadbook import fetch_basemap, parse_gpx, run_pipeline
 from roadbook.render_pages import (
     GRADIENT_COLORS, GRADIENT_VMAX_CLIP, HEIGHT_RATIOS, PAGE_SIZE_IN,
-    clean_name, compute_gradient, page_subtitle,
+    build_sheets, clean_name, compute_gradient, page_subtitle, table_header, waypoint_table,
 )
 
 PREVIEW_MAX_POINTS = 3000
@@ -83,6 +83,8 @@ class RenderOptions:
     api_key: str | None = None
     style_id: str | None = None
     splits: list | None = None  # km where pages end; None = equal-distance split
+    part_tables: bool = True  # waypoint-table page after each map page
+    final_table: bool = True  # final waypoint table of all points
     waypoint_radius_m: float = 60.0
     race_title: str | None = None
     tile_workers: int = 4
@@ -112,6 +114,7 @@ class RenderOptions:
             maptiler_map_id=d["style_id"] if d["provider"] == "maptiler" else None,
             waypoint_radius_m=d["waypoint_radius_m"], tile_workers=d["tile_workers"],
             race_title=d["race_title"], style=d["style"], splits=d["splits"],
+            part_tables=d["part_tables"], final_table=d["final_table"],
         )
 
 
@@ -159,8 +162,9 @@ def analyze(gpx_path, opts: RenderOptions):
     pois = [dict(km=km, name=clean_name(name), lat=plat, lon=plon, ele=pele)
             for (km, name, plat, plon, pele) in data["pois"]]
 
+    boxes = fetch_basemap.page_bboxes(data, n_pages, PAD_DEG, splits=opts.splits)
     pages = []
-    for box in fetch_basemap.page_bboxes(data, n_pages, PAD_DEG, splits=opts.splits):
+    for box in boxes:
         d0, d1 = box["d0"], box["d1"]
         m = (dist_km >= d0 - 0.1) & (dist_km <= d1 + 0.1)
         seg_ele = eles[m]
@@ -176,6 +180,16 @@ def analyze(gpx_path, opts: RenderOptions):
             min_ele=float(seg_ele.min()), max_ele=float(seg_ele.max()),
             poi_count=sum(1 for p in pois if d0 - 0.05 <= p["km"] <= d1 + 0.05),
         ))
+
+    # page sequence (maps, part tables, final table) — numbering and table
+    # rows/headers for the preview, see render_pages.build_sheets
+    edges = [p["d0"] for p in pages] + [pages[-1]["d1"]]
+    poi_tuples = [(p["km"], p["name"], p["lat"], p["lon"], p["ele"]) for p in pois]
+    sheets = build_sheets(waypoint_table(data, poi_tuples), edges,
+                          part_tables=opts.part_tables, final_table=opts.final_table)
+    for sh in sheets:
+        if sh["kind"] != "map":
+            sh["subtitle"], sh["stats"] = table_header(sh, data, edges, bool(opts.splits), poi_tuples)
 
     return dict(
         file=gpx_path.name,
@@ -200,6 +214,7 @@ def analyze(gpx_path, opts: RenderOptions):
         ),
         pois=pois,
         pages=pages,
+        sheets=sheets,
         tiles_total=sum(p["bounds"]["tiles"] for p in pages),
         tile_px=provider["tile_px"],
         attribution=provider["attribution"],

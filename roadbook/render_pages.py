@@ -48,7 +48,8 @@ from matplotlib.transforms import Bbox
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from PIL import Image
 
-from roadbook.layout import GRID, HEIGHT_RATIOS, PAGE_SIZE_IN
+from roadbook.layout import (GRID, HEIGHT_RATIOS, PAGE_SIZE_IN, TABLE_FONT_PT, TABLE_HEAD_IN,
+                             TABLE_ROW_IN, table_rows_per_page)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WORK_DIR = PROJECT_ROOT / "work"
@@ -209,22 +210,14 @@ def build_page(mode, page, ctx):
 
     # ---- HEADER ----
     ax_h = fig.add_subplot(gs[0])
-    ax_h.set_xlim(0, 1); ax_h.set_ylim(0, 1); ax_h.axis("off")
-    ax_h.patch.set_alpha(0.0)
     if is_vector:
-        ax_h.text(0, 1.0, race_title, fontsize=13, fontweight="bold", va="top", ha="left", color="#1a1a2e")
-        ax_h.text(0, 0.40, f"Sector {sector_code}: {start_name} -> {end_name}", fontsize=10.5,
-                   fontweight="bold", va="top", ha="left", color="#16213e")
-        ax_h.text(1.0, 0.40, page_subtitle(d0, d1, ctx["custom_split"], pois_all, d["total_dist_km"],
-                                           start_name, end_name),
-                  fontsize=10.5, fontweight="bold", va="top", ha="right", color="#2f3e8a")
-        stats = (f"Part {pnum}/{n_pages} ({d0:.1f}-{d1:.1f} km)  |  "
-                 f"Distance {seg_len:.1f} km  |  D+ {seg_gain:.0f} m  |  D- {seg_loss:.0f} m  |  "
-                 f"Elev min/max {seg_min:.0f}/{seg_max:.0f} m")
-        ax_h.text(0, -0.05, stats, fontsize=8, va="top", ha="left", color="#333333", family="monospace")
-        if version or update_tag:
-            ax_h.text(1.0, 1.0, f"Rev. {version} - {update_tag}", fontsize=7.5, va="top", ha="right", color="#888888")
-        ax_h.plot([0, 1], [-0.28, -0.28], color="#1a1a2e", linewidth=1.2, transform=ax_h.transAxes, clip_on=False)
+        subtitle = page_subtitle(d0, d1, ctx["custom_split"], pois_all, d["total_dist_km"],
+                                 start_name, end_name)
+        stats = f"Part {pnum}/{n_pages} ({d0:.1f}-{d1:.1f} km)  |  " + stats_text(
+            seg_len, seg_gain, seg_loss, seg_min, seg_max)
+        draw_header(ax_h, ctx, subtitle, stats)
+    else:
+        ax_h.axis("off"); ax_h.patch.set_alpha(0.0)
 
     # ---- MAP ----
     ax_m = fig.add_subplot(gs[1])
@@ -498,17 +491,225 @@ def build_page(mode, page, ctx):
                       color="#333333", ha="left", va="top")
 
     # ---- FOOTER ----
-    ax_f = fig.add_subplot(gs[3]); ax_f.axis("off")
-    ax_f.patch.set_alpha(0.0)
-    ax_f.set_xlim(0, 1); ax_f.set_ylim(0, 1)
+    ax_f = fig.add_subplot(gs[3])
     if is_vector:
-        ax_f.plot([0, 1], [1.0, 1.0], color="#1a1a2e", linewidth=0.7, transform=ax_f.transAxes, clip_on=False)
-        ax_f.text(0, 0.15, f"Roadbook - Sector {sector_code} - Page {pnum} of {n_pages}",
-                  fontsize=7.5, color="#666666")
-        ax_f.text(1.0, 0.15, f"Generated {date.today().isoformat()} - GPX: {start_name} - {end_name} ({update_tag})",
-                  fontsize=7.5, color="#666666", ha="right")
+        draw_footer(ax_f, ctx, ctx["sheets"].index(dict(kind="map", page=page)) + 1)
+    else:
+        ax_f.axis("off"); ax_f.patch.set_alpha(0.0)
 
     return fig, map_rect
+
+
+def stats_text(length, gain, loss, ele_min, ele_max):
+    return (f"Distance {length:.1f} km  |  D+ {gain:.0f} m  |  D- {loss:.0f} m  |  "
+            f"Elev min/max {ele_min:.0f}/{ele_max:.0f} m")
+
+
+def draw_header(ax_h, ctx, subtitle, stats):
+    """Page header: title, sector line + subtitle (right), stats line, rule.
+    Shared by the map pages and the final waypoint-table page."""
+    d = ctx["data"]
+    ax_h.set_xlim(0, 1); ax_h.set_ylim(0, 1); ax_h.axis("off")
+    ax_h.patch.set_alpha(0.0)
+    ax_h.text(0, 1.0, ctx["race_title"], fontsize=13, fontweight="bold", va="top", ha="left", color="#1a1a2e")
+    ax_h.text(0, 0.40, f"Sector {d['sector_code']}: {d['start_name']} -> {d['end_name']}", fontsize=10.5,
+              fontweight="bold", va="top", ha="left", color="#16213e")
+    ax_h.text(1.0, 0.40, subtitle, fontsize=10.5, fontweight="bold", va="top", ha="right", color="#2f3e8a")
+    ax_h.text(0, -0.05, stats, fontsize=8, va="top", ha="left", color="#333333", family="monospace")
+    if d["version"] or d["update_tag"]:
+        ax_h.text(1.0, 1.0, f"Rev. {d['version']} - {d['update_tag']}", fontsize=7.5, va="top", ha="right",
+                  color="#888888")
+    ax_h.plot([0, 1], [-0.28, -0.28], color="#1a1a2e", linewidth=1.2, transform=ax_h.transAxes, clip_on=False)
+
+
+def draw_footer(ax_f, ctx, num):
+    """Footer with the physical page number (position in ctx["sheets"])."""
+    d = ctx["data"]
+    total = len(ctx["sheets"])
+    ax_f.axis("off"); ax_f.patch.set_alpha(0.0)
+    ax_f.set_xlim(0, 1); ax_f.set_ylim(0, 1)
+    ax_f.plot([0, 1], [1.0, 1.0], color="#1a1a2e", linewidth=0.7, transform=ax_f.transAxes, clip_on=False)
+    ax_f.text(0, 0.15, f"Roadbook - Sector {d['sector_code']} - Page {num} of {total}",
+              fontsize=7.5, color="#666666")
+    ax_f.text(1.0, 0.15, f"Generated {date.today().isoformat()} - GPX: {d['start_name']} - {d['end_name']} "
+              f"({d['update_tag']})", fontsize=7.5, color="#666666", ha="right")
+
+
+def merge_close_pois(pois, within_km=0.3):
+    """Waypoints closer than within_km along the track become one entry
+    ("A / B") — same rule the map labels use."""
+    merged = []
+    for p in sorted(pois, key=lambda p: p[0]):
+        if merged and abs(p[0] - merged[-1][0]) < within_km:
+            prev = merged[-1]
+            merged[-1] = ((prev[0] + p[0]) / 2, prev[1] + " / " + p[1], p[2], p[3], (prev[4] + p[4]) / 2)
+        else:
+            merged.append(p)
+    return merged
+
+
+def waypoint_table(data, pois):
+    """Every point along the track (start and finish always included), as
+    dicts with name, km, and the distance / D+ / D- to the previous and next
+    point and from the start. "Previous" and "next" run along the whole
+    track, also across page breaks. D+/D- are raw elevation-difference
+    sums, the same as the header stats."""
+    dist_km = data["dist"] / 1000.0
+    total = float(data["total_dist_km"])
+    d_ele = np.diff(data["eles"])
+    cum_up = np.concatenate([[0.0], np.cumsum(np.clip(d_ele, 0, None))])
+    cum_down = np.concatenate([[0.0], np.cumsum(np.clip(-d_ele, 0, None))])
+
+    # a waypoint at the very start/finish *is* that end of the track
+    points = [(0.0 if p[0] <= 0.3 else total if p[0] >= total - 0.3 else float(p[0]), p[1])
+              for p in merge_close_pois(pois)]
+    if not points or points[0][0] > 0.3:
+        points.insert(0, (0.0, data["start_name"] or "Start"))
+    if points[-1][0] < total - 0.3:
+        points.append((total, data["end_name"] or "Finish"))
+
+    km = [p[0] for p in points]
+    up = np.interp(km, dist_km, cum_up).tolist()
+    down = np.interp(km, dist_km, cum_down).tolist()
+    rows = []
+    for i, (k, name) in enumerate(points):
+        prev_i, next_i = (i - 1 if i else None), (i + 1 if i + 1 < len(points) else None)
+        rows.append(dict(
+            name=name, km=k,
+            dkm_prev=None if prev_i is None else k - km[prev_i],
+            up_prev=None if prev_i is None else up[i] - up[prev_i],
+            down_prev=None if prev_i is None else down[i] - down[prev_i],
+            up_next=None if next_i is None else up[next_i] - up[i],
+            down_next=None if next_i is None else down[next_i] - down[i],
+            up_total=up[i], down_total=down[i],
+        ))
+    return rows
+
+
+def _chunks(rows):
+    n = table_rows_per_page()
+    return [rows[i:i + n] for i in range(0, len(rows), n)] or [[]]
+
+
+def build_sheets(rows, edges, part_tables=True, final_table=True):
+    """The document's page sequence: each map page, optionally followed by
+    its part table, then optionally the final table of all points. Each
+    entry is a dict(kind="map"|"part"|"final", page, rows, chunk, n_chunks);
+    tables longer than one page are split into chunks. A sheet's position
+    in this list + 1 is its page number (footer)."""
+    sheets = []
+    for p in range(len(edges) - 1):
+        sheets.append(dict(kind="map", page=p))
+        if part_tables:
+            part = [r for r in rows if edges[p] - 0.05 <= r["km"] <= edges[p + 1] + 0.05]
+            chunks = _chunks(part)
+            sheets += [dict(kind="part", page=p, rows=c, chunk=i, n_chunks=len(chunks))
+                       for i, c in enumerate(chunks)]
+    if final_table:
+        chunks = _chunks(rows)
+        sheets += [dict(kind="final", page=None, rows=c, chunk=i, n_chunks=len(chunks))
+                   for i, c in enumerate(chunks)]
+    return sheets
+
+
+def segment_stats(data, d0, d1):
+    """(length km, D+, D-, min ele, max ele) of the track between d0 and d1
+    km — the same slice and sums a map page's header uses."""
+    dist_km = data["dist"] / 1000.0
+    m = (dist_km >= d0 - 0.1) & (dist_km <= d1 + 0.1)
+    seg_ele, seg_dist = data["eles"][m], dist_km[m]
+    d_ele = np.diff(seg_ele)
+    return (float(seg_dist[-1] - seg_dist[0]), float(d_ele[d_ele > 0].sum()), float(-d_ele[d_ele < 0].sum()),
+            float(seg_ele.min()), float(seg_ele.max()))
+
+
+def table_header(sheet, data, edges, custom_split, pois):
+    """(subtitle, stats line) for a table sheet: a part table repeats its
+    map page's header, the final table covers the whole track."""
+    more = f" {sheet['chunk'] + 1}/{sheet['n_chunks']}" if sheet["n_chunks"] > 1 else ""
+    total = float(data["total_dist_km"])
+    if sheet["kind"] == "part":
+        p = sheet["page"]
+        d0, d1 = float(edges[p]), float(edges[p + 1])
+        label = f"Part {p + 1}/{len(edges) - 1} waypoints{more}"
+    else:
+        d0, d1 = 0.0, total
+        label = f"All waypoints{more}"
+    subtitle = page_subtitle(d0, d1, custom_split, pois, total, data["start_name"], data["end_name"])
+    return subtitle, f"{label} ({d0:.1f}-{d1:.1f} km)  |  " + stats_text(*segment_stats(data, d0, d1))
+
+
+TABLE_COLUMNS = [  # (key, header, width fraction, format)
+    ("name", "Point", 0.31, None),
+    ("km", "km\nfrom start", 0.085, "{:.1f}"),
+    ("dkm_prev", "km from\nprevious", 0.085, "{:.1f}"),
+    ("up_prev", "D+ from\nprevious", 0.075, "{:.0f}"),
+    ("down_prev", "D- from\nprevious", 0.075, "{:.0f}"),
+    ("up_next", "D+ to\nnext", 0.075, "{:.0f}"),
+    ("down_next", "D- to\nnext", 0.075, "{:.0f}"),
+    ("up_total", "D+ from\nstart", 0.11, "{:.0f}"),
+    ("down_total", "D- from\nstart", 0.11, "{:.0f}"),
+]
+
+
+def build_table_page(num, ctx):
+    """Vector-only waypoint-table page for ctx["sheets"][num - 1] — a
+    part table (after its map page) or the final table of all points."""
+    sheet = ctx["sheets"][num - 1]
+    fig = plt.figure(figsize=PAGE_SIZE_IN)
+    fig.patch.set_alpha(0.0)
+    gs = gridspec.GridSpec(4, 1, height_ratios=HEIGHT_RATIOS, **GRID)
+    draw_header(fig.add_subplot(gs[0]), ctx,
+                *table_header(sheet, ctx["data"], ctx["edges"], ctx["custom_split"], ctx["pois_all"]))
+
+    # table fills the map + profile rows
+    top = fig.add_subplot(gs[1]).get_position()
+    bottom = fig.add_subplot(gs[2]).get_position()
+    for a in fig.axes[1:]:
+        a.remove()
+    ax = fig.add_axes([top.x0, bottom.y0, top.width, top.y1 - bottom.y0])
+    ax.axis("off"); ax.patch.set_alpha(0.0)
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+
+    rows = sheet["rows"]
+    height_in = (top.y1 - bottom.y0) * PAGE_SIZE_IN[1]
+    head_h = TABLE_HEAD_IN / height_in                          # axes fraction
+    row_h = min(TABLE_ROW_IN / height_in, (0.99 - head_h) / max(len(rows), 1))
+    size = max(TABLE_FONT_PT[0], min(TABLE_FONT_PT[1], row_h * height_in * 72 * 0.55))  # pt, shrinks for long lists
+    font_kw = dict(fontfamily=ctx["style"]["label_font"]) if ctx["style"]["label_font"] else {}
+    max_chars = int(TABLE_COLUMNS[0][2] * top.width * PAGE_SIZE_IN[0] * 72 / (size * 0.55))
+
+    xs = np.concatenate([[0], np.cumsum([c[2] for c in TABLE_COLUMNS])])
+    pad = 0.006
+    ax.add_patch(plt.Rectangle((0, 1 - head_h), 1, head_h, facecolor="#1a1a2e", edgecolor="none"))
+    for (key, label, _, _), x0, x1 in zip(TABLE_COLUMNS, xs[:-1], xs[1:]):
+        left = key == "name"
+        ax.text(x0 + pad if left else x1 - pad, 1 - head_h / 2, label, color="white", fontsize=7.5,
+                fontweight="bold", ha="left" if left else "right", va="center", linespacing=1.1)
+    for i, r in enumerate(rows):
+        y1 = 1 - head_h - i * row_h
+        if i % 2:
+            ax.add_patch(plt.Rectangle((0, y1 - row_h), 1, row_h, facecolor="#f0f2f6", edgecolor="none"))
+        ax.plot([0, 1], [y1 - row_h] * 2, color="#d5d9e0", linewidth=0.4)
+        for (key, _, _, fmt), x0, x1 in zip(TABLE_COLUMNS, xs[:-1], xs[1:]):
+            v = r[key]
+            if fmt is None:
+                text = v if len(v) <= max_chars else v[:max_chars - 1].rstrip() + "…"
+            else:
+                text = "–" if v is None else fmt.format(v)
+            left = key == "name"
+            ax.text(x0 + pad if left else x1 - pad, y1 - row_h / 2, text, fontsize=size,
+                    ha="left" if left else "right", va="center", color="#1a1a2e",
+                    fontweight="bold" if key in ("name", "km") else "normal", **font_kw)
+    # light separators: between the "previous", "next" and "from start" groups
+    y_end = 1 - head_h - len(rows) * row_h
+    for k in (2, 5, 7):
+        ax.plot([xs[k], xs[k]], [y_end, 1], color="#b8bec9", linewidth=0.5)
+    if not rows:
+        ax.text(0.5, 1 - head_h - 0.05, "No waypoints.", ha="center", va="top", fontsize=9, color="#666666")
+
+    draw_footer(fig.add_subplot(gs[3]), ctx, num)
+    return fig
 
 
 def main():
@@ -522,6 +723,11 @@ def main():
     ap.add_argument("--out-dir", default=None, help="Output folder for the two intermediate PDFs (default: work/)")
     ap.add_argument("--style", default=None,
                      help="JSON file overriding DEFAULT_STYLE (label font, line widths, colour scale, label offsets)")
+    ap.add_argument("--no-part-tables", action="store_true",
+                     help="Don't add a waypoint-table page after each map page")
+    ap.add_argument("--no-final-table", action="store_true",
+                     help="Don't add the final waypoint table of all points")
+    ap.add_argument("--no-tables", action="store_true", help="Neither of the two")
     args = ap.parse_args()
 
     data_pkl = Path(args.data_pkl)
@@ -566,6 +772,9 @@ def main():
 
     ctx = dict(
         data=data, n_pages=n_pages, edges=edges, custom_split=custom_split, grad_all=grad_all,
+        sheets=build_sheets(waypoint_table(data, pois_all), edges,
+                            part_tables=not (args.no_tables or args.no_part_tables),
+                            final_table=not (args.no_tables or args.no_final_table)),
         cmap=cmap, norm=norm, basemap_bounds=basemap_bounds, basemap_imgs=basemap_imgs,
         race_title=args.race_title or data.get("race_title", "Roadbook"),
         pois_all=pois_all, attribution=attribution, style=style,
@@ -577,23 +786,31 @@ def main():
     raster_pdf = out_dir / f"{slug}_raster.pdf"
     vector_pdf = out_dir / f"{slug}_vector.pdf"
 
+    # map_rects is keyed by vector-PDF page (1-based); "basemap" names the
+    # pageN_raw.jpg to place there. Table pages have no entry (no basemap).
     map_rects = {}
     with PdfPages(raster_pdf) as pdf_r, PdfPages(vector_pdf) as pdf_v:
-        for page in range(n_pages):
-            fig_r, _ = build_page("raster", page, ctx)
-            pdf_r.savefig(fig_r)
-            plt.close(fig_r)
+        for num, sheet in enumerate(ctx["sheets"], start=1):
+            if sheet["kind"] == "map":
+                page = sheet["page"]
+                fig_r, _ = build_page("raster", page, ctx)
+                pdf_r.savefig(fig_r)
+                plt.close(fig_r)
 
-            fig_v, map_rect = build_page("vector", page, ctx)
+                fig_v, map_rect = build_page("vector", page, ctx)
+                map_rects[num] = dict(map_rect, basemap=page + 1)
+            else:
+                fig_v = build_table_page(num, ctx)
             pdf_v.savefig(fig_v, transparent=True)
             plt.close(fig_v)
-            map_rects[page + 1] = map_rect
 
     map_rects_path = basemap_dir / "map_rects.json"
     with open(map_rects_path, "w") as f:
         json.dump(map_rects, f, indent=2)
 
-    print(f"Rendered {n_pages} pages (grad_vmax={grad_vmax:.1f}%)")
+    n_tables = sum(s["kind"] != "map" for s in ctx["sheets"])
+    print(f"Rendered {n_pages} map pages + {n_tables} waypoint-table pages "
+          f"(grad_vmax={grad_vmax:.1f}%)")
     print(f"  raster -> {raster_pdf}  (low-res preview only)")
     print(f"  vector -> {vector_pdf}")
     print(f"  map rects -> {map_rects_path}  (used by merge_layers.py to place full-res JPGs)")
