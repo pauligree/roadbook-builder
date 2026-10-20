@@ -87,6 +87,8 @@ python -m webapp.server
   uses — header text, aspect-correct map panel, labels, profile, footer — plus
   tile count and approximate print ppi for the chosen zoom.
 - **Final PDF** tab: the rendered roadbook, once you press *Render roadbook*.
+- **Deleting files:** click the **×** button beside a GPX or an output PDF, then
+  **Delete?** to confirm. Files go to the macOS Trash, not straight to oblivion.
 
 **Desktop launcher.** `scripts/make_desktop_app.sh` creates
 `~/Desktop/Roadbook Builder.app`: double-click starts the server in the

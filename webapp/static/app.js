@@ -228,6 +228,37 @@ function showError(msg) {
   draw();
 }
 
+// ---- file rows with a delete button -------------------------------------
+// × arms the button ("Delete?"), a second click within 3 s deletes. The
+// server moves the file to the Trash, so a slip is recoverable.
+function fileRow(item, deleteUrl, onDeleted) {
+  const row = document.createElement("div");
+  row.className = "row";
+  const del = document.createElement("button");
+  del.className = "del"; del.type = "button"; del.textContent = "×"; del.title = "Move to Trash";
+  let timer = null;
+  const disarm = () => { clearTimeout(timer); del.classList.remove("armed"); del.textContent = "×"; };
+  del.onclick = async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (!del.classList.contains("armed")) {
+      del.classList.add("armed"); del.textContent = "Delete?";
+      timer = setTimeout(disarm, 3000);
+      return;
+    }
+    disarm(); del.disabled = true;
+    try {
+      const res = await fetch(deleteUrl, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+      await onDeleted();
+    } catch (err) {
+      del.disabled = false; del.title = "Delete failed: " + err.message; del.classList.add("failed");
+    }
+  };
+  del.onblur = disarm;
+  row.append(item, del);
+  return row;
+}
+
 // ---- left pane: files ---------------------------------------------------
 async function loadFiles() {
   state.files = await api("/api/files");
@@ -246,7 +277,21 @@ async function loadFiles() {
     b.textContent = f.name.replace(/\.gpx$/i, "");
     b.title = f.name;
     b.onclick = () => selectFile(f.path);
-    list.appendChild(b);
+    list.appendChild(fileRow(b, `/api/files?path=${encodeURIComponent(f.path)}`, async () => {
+      delete labelStore[f.path]; delete splitStore[f.path];
+      try {
+        localStorage.setItem(LABELS_KEY, JSON.stringify(labelStore));
+        localStorage.setItem(SPLITS_KEY, JSON.stringify(splitStore));
+      } catch (_) {}
+      if (state.file === f.path) {
+        state.file = null; state.data = null;
+        $("renderBtn").disabled = true; $("summary").textContent = ""; $("strip").innerHTML = "";
+        $("pagesNote").textContent = ""; $("zoomNote").textContent = ""; $("splitField").hidden = true;
+        $("empty").textContent = "Select a GPX track on the left."; $("empty").hidden = false;
+        if (state.view === "final") showFinal(); else draw();
+      }
+      await loadFiles();
+    }));
   }
 }
 
@@ -762,7 +807,10 @@ async function loadOutputs() {
   for (const o of state.outputs.slice(0, 15)) {
     const a = document.createElement("a");
     a.href = `/output/${encodeURIComponent(o.name)}`; a.target = "_blank"; a.textContent = o.name; a.title = o.name;
-    list.appendChild(a);
+    list.appendChild(fileRow(a, `/api/output/${encodeURIComponent(o.name)}`, async () => {
+      await loadOutputs();
+      if (state.view === "final") { $("pdfFrame").removeAttribute("src"); showFinal(); }
+    }));
   }
 }
 

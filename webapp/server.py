@@ -13,9 +13,13 @@ Endpoints:
     GET  /api/jobs/{job}         render progress / result
     GET  /api/output             finished roadbook PDFs
     GET  /output/{name}          serve a finished PDF
+    DELETE /api/files?path=...   move a GPX to the Trash
+    DELETE /api/output/{name}    move a finished PDF to the Trash
 """
 import re
+import shutil
 import threading
+import time
 import traceback
 import uuid
 from pathlib import Path
@@ -50,6 +54,26 @@ def resolve_gpx(rel: str) -> Path:
     return p
 
 
+def output_file(name: str) -> Path:
+    p = (OUTPUT_DIR / name).resolve()
+    if p.parent != OUTPUT_DIR.resolve() or p.suffix != ".pdf" or not p.is_file():
+        raise HTTPException(404)
+    return p
+
+
+def move_to_trash(p: Path):
+    """Deletes are recoverable: move into the macOS Trash (~/.Trash),
+    renaming on a clash like Finder does. Elsewhere, delete outright."""
+    trash = Path.home() / ".Trash"
+    if not trash.is_dir():
+        p.unlink()
+        return
+    dest = trash / p.name
+    if dest.exists():
+        dest = trash / f"{p.stem} {time.strftime('%H.%M.%S')}{p.suffix}"
+    shutil.move(str(p), dest)
+
+
 def parse_options(d) -> api.RenderOptions:
     try:
         return api.RenderOptions.from_dict(d)
@@ -65,6 +89,12 @@ def list_files():
             out.append(dict(path=str(f.relative_to(PROJECT_ROOT)), name=f.name, folder=d.name,
                             size=f.stat().st_size))
     return out
+
+
+@app.delete("/api/files")
+def delete_file(path: str):
+    move_to_trash(resolve_gpx(path))
+    return dict(deleted=path)
 
 
 @app.get("/api/providers")
@@ -161,10 +191,13 @@ def list_output():
 
 @app.get("/output/{name}")
 def output_pdf(name: str):
-    p = (OUTPUT_DIR / name).resolve()
-    if p.parent != OUTPUT_DIR.resolve() or p.suffix != ".pdf" or not p.is_file():
-        raise HTTPException(404)
-    return FileResponse(p, media_type="application/pdf")
+    return FileResponse(output_file(name), media_type="application/pdf")
+
+
+@app.delete("/api/output/{name}")
+def delete_output(name: str):
+    move_to_trash(output_file(name))
+    return dict(deleted=name)
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

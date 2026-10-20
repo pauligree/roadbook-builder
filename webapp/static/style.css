@@ -180,3 +180,21 @@ body {
 .split-list .km{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--muted);min-width:4.2em;text-align:right}
 .split-list .pg{margin-left:auto;font-size:11px;color:var(--muted)}
 input[type=range]:disabled{opacity:.4}
+
+/* file rows: item + always-visible delete button */
+.row { display: flex; align-items: center; gap: 6px; }
+.row > :first-child { flex: 1; min-width: 0; }
+.del {
+  flex: none; width: 22px; height: 22px; padding: 0;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 5px;
+  background: var(--panel); color: var(--muted);
+  font: inherit; font-size: 14px; line-height: 1; cursor: pointer;
+}
+.del:hover { border-color: var(--err); color: var(--err); }
+.del:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.del.armed {
+  width: auto; padding: 0 7px; font-size: 11px; font-weight: 600;
+  border-color: var(--err); background: var(--err); color: #fff;
+}
+.del.failed { border-color: var(--err); color: var(--err); }
