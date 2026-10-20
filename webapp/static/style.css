@@ -173,3 +173,10 @@ body {
 }
 .ghost:hover { border-color: var(--accent); color: var(--accent); }
 #canvas.dragging { cursor: grabbing !important; }
+
+.split-list{max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:4px 0;margin-top:4px}
+.split-list label{display:flex;gap:6px;align-items:baseline;padding:2px 8px;font-size:12px;cursor:pointer}
+.split-list label:hover{background:var(--sel)}
+.split-list .km{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--muted);min-width:4.2em;text-align:right}
+.split-list .pg{margin-left:auto;font-size:11px;color:var(--muted)}
+input[type=range]:disabled{opacity:.4}

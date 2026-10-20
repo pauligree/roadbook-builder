@@ -60,7 +60,12 @@ OUTPUT_DIR = PROJECT_ROOT / "output"
 SINGLE_PAGE_FILENAME_MARKERS = ["backup route"]
 
 
-def effective_pages(gpx_path: Path, args) -> int:
+def effective_pages(gpx_path: Path, args, total_km=None) -> int:
+    """Page count: from explicit --splits (needs the track length to drop
+    out-of-range ones), else 1 for single-page filenames, else --pages."""
+    splits = getattr(args, "splits", None)
+    if splits and total_km is not None:
+        return len(fetch_basemap.page_edges(total_km, args.pages, splits)) - 1
     name_lower = gpx_path.name.lower()
     for marker in SINGLE_PAGE_FILENAME_MARKERS:
         if marker in name_lower:
@@ -79,10 +84,6 @@ def process_one(gpx_path: Path, args, out_override: Path = None, progress=None) 
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    n_pages = effective_pages(gpx_path, args)
-    if n_pages != args.pages:
-        print(f"(filename matches a single-page marker -> generating 1 page instead of {args.pages})")
-
     print(f"=== [1/4] Parsing {gpx_path.name} ===")
     progress(1, f"Parsing {gpx_path.name}")
     data = parse_gpx.parse_gpx(gpx_path, waypoint_radius_m=args.waypoint_radius_m)
@@ -93,13 +94,20 @@ def process_one(gpx_path: Path, args, out_override: Path = None, progress=None) 
     print(f"  {data['total_dist_km']:.2f} km | D+ {data['gain']:.0f} m | D- {data['loss']:.0f} m | "
           f"{len(data['pois'])} waypoints matched")
 
+    splits = getattr(args, "splits", None)
+    n_pages = effective_pages(gpx_path, args, data["total_dist_km"])
+    if splits:
+        print(f"  split at {', '.join(f'{k:.2f}' for k in splits)} km -> {n_pages} pages")
+    elif n_pages != args.pages:
+        print(f"(filename matches a single-page marker -> generating 1 page instead of {args.pages})")
+
     print(f"\n=== [2/4] Fetching basemap tiles ({args.provider}, zoom {args.zoom}) ===")
     progress(2, f"Fetching basemap tiles ({args.provider}, zoom {args.zoom})")
     basemap_dir = WORK_DIR / f"{slug}_basemaps"
     style_id = args.mapbox_style or args.maptiler_map_id
     fetch_basemap.fetch_all_pages(data, basemap_dir, n_pages=n_pages, zoom=args.zoom,
                                    workers=args.tile_workers, provider=args.provider,
-                                   api_key=args.api_key, style_id=style_id,
+                                   api_key=args.api_key, style_id=style_id, splits=splits,
                                    on_page=lambda p, n: progress(2, f"Fetched basemap page {p}/{n}"))
 
     print(f"\n=== [3/4] Rendering {n_pages} page{'s' if n_pages != 1 else ''} ===")
@@ -140,6 +148,9 @@ def main():
                           "else opentopomap, which needs no key). "
                           "mapbox/maptiler need --api-key (or the matching env var) and give "
                           "genuine retina tiles.")
+    ap.add_argument("--splits", type=fetch_basemap.parse_splits, default=None,
+                     help="Comma-separated km where pages end, e.g. 12.4,31.0 (overrides --pages: "
+                          "pages = number of splits + 1). Default: equal-distance split.")
     ap.add_argument("--api-key", default=None,
                      help="API key/access token for --provider mapbox or maptiler")
     ap.add_argument("--mapbox-style", default=None, help="Mapbox style ID (default: mapbox/outdoors-v12)")

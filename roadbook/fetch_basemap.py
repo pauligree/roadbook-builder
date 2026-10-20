@@ -92,6 +92,8 @@ import numpy as np
 import requests
 from PIL import Image
 
+from roadbook import layout
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WORK_DIR = PROJECT_ROOT / "work"
 
@@ -264,21 +266,80 @@ def build_mosaic(session, provider, zoom, x0, x1, y0, y1, style=None, api_key=No
     return mosaic, len(tasks), n_failed
 
 
-def page_bboxes(data, n_pages, pad_deg=0.02):
+def parse_splits(text):
+    """argparse type for --splits: '12.4,31' -> [12.4, 31.0]."""
+    return [float(v) for v in str(text).split(",") if v.strip()]
+
+
+def page_edges(total_km, n_pages, splits=None):
+    """Page boundaries in km. `splits` (km values where a page should end,
+    e.g. chosen waypoints) overrides the default equal-distance split;
+    values too close to the start/end or to each other are dropped."""
+    if splits:
+        cuts = []
+        for km in sorted(float(k) for k in splits):
+            if 0.05 < km < total_km - 0.05 and (not cuts or km - cuts[-1] > 0.05):
+                cuts.append(km)
+        return np.array([0.0, *cuts, total_km])
+    return np.linspace(0, total_km, n_pages + 1)
+
+
+def fill_panel(box, aspect=None):
+    """Grow a lat/lon box (symmetrically, about its centre) so its true
+    ground proportions match the map panel's — the map then fills the whole
+    panel instead of leaving blank bands beside or above/below it. Uses the
+    same equirectangular cos(lat0) scaling render_pages applies via
+    set_aspect()."""
+    aspect = aspect or layout.map_panel_aspect()
+    w, e, s, n = box["west"], box["east"], box["south"], box["north"]
+    k = math.cos(math.radians((s + n) / 2))
+    width, height = (e - w) * k, n - s
+    if width / height < aspect:
+        half = (aspect * height / k) / 2
+        mid = (w + e) / 2
+        w, e = mid - half, mid + half
+    else:
+        half = (width / aspect) / 2
+        mid = (s + n) / 2
+        s, n = mid - half, mid + half
+    return dict(box, west=w, east=e, south=s, north=n)
+
+
+def page_extent(box, zoom, tile_px):
+    """Tile range to fetch for a page box, plus the pixel crop of the
+    stitched mosaic that matches the box exactly and the lat/lon bounds of
+    that (pixel-rounded) crop. Shared with the web app's preview."""
+    xf0, yf0 = deg2tile(box["north"], box["west"], zoom)
+    xf1, yf1 = deg2tile(box["south"], box["east"], zoom)
+    x0, x1 = math.floor(xf0), math.ceil(xf1)
+    y0, y1 = math.floor(yf0), math.ceil(yf1)
+    crop = (round((xf0 - x0) * tile_px), round((yf0 - y0) * tile_px),
+            round((xf1 - x0) * tile_px), round((yf1 - y0) * tile_px))
+    return dict(
+        tiles=(x0, x1, y0, y1), crop=crop,
+        west=tile2lon(x0 + crop[0] / tile_px, zoom), east=tile2lon(x0 + crop[2] / tile_px, zoom),
+        north=tile2lat(y0 + crop[1] / tile_px, zoom), south=tile2lat(y0 + crop[3] / tile_px, zoom),
+    )
+
+
+def page_bboxes(data, n_pages, pad_deg=0.02, splits=None, fill=True):
+    """One lat/lon box per page: the page's track segment plus `pad_deg`,
+    grown to fill the map panel when `fill`. With `splits`, the page count
+    is len(edges) - 1, not n_pages."""
     lats, lons, dist = data["lats"], data["lons"], data["dist"]
     dist_km = dist / 1000.0
-    total_km = data["total_dist_km"]
-    edges = np.linspace(0, total_km, n_pages + 1)
+    edges = page_edges(data["total_dist_km"], n_pages, splits)
     boxes = []
-    for i in range(n_pages):
+    for i in range(len(edges) - 1):
         d0, d1 = edges[i], edges[i + 1]
         mask = (dist_km >= d0 - 0.1) & (dist_km <= d1 + 0.1)
         la, lo = lats[mask], lons[mask]
-        boxes.append(dict(
+        box = dict(
             page=i + 1, d0=float(d0), d1=float(d1),
             south=float(la.min() - pad_deg), north=float(la.max() + pad_deg),
             west=float(lo.min() - pad_deg), east=float(lo.max() + pad_deg),
-        ))
+        )
+        boxes.append(fill_panel(box) if fill else box)
     return boxes
 
 
@@ -292,7 +353,7 @@ class BasemapFetchError(RuntimeError):
 
 def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
                      verbose=True, max_failed_fraction=0.5,
-                     provider=None, api_key=None, style_id=None, on_page=None):
+                     provider=None, api_key=None, style_id=None, on_page=None, splits=None):
     """Fetch+stitch the basemap mosaic for every page and write
     pageN_raw.jpg + bounds.json + provider.json into out_dir. Returns the
     bounds dict. This is the single implementation used by both the CLI
@@ -301,6 +362,10 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
     `style_id` is the provider's style/map identifier (Mapbox style ID,
     MapTiler map ID, ...); each provider has its own default (see PROVIDERS)
     used when style_id is None. Ignored for opentopomap.
+
+    `splits` (km values) ends pages at those distances instead of splitting
+    into n_pages equal parts; the page edges used are written into
+    bounds.json (d0/d1) so render_pages draws exactly the same split.
 
     `on_page`, if given, is called as on_page(page, n_pages) after each
     page's mosaic is saved (progress reporting for the web app).
@@ -321,7 +386,7 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    boxes = page_bboxes(data, n_pages, pad_deg)
+    boxes = page_bboxes(data, n_pages, pad_deg, splits=splits)
     bounds_out = {}
 
     session = requests.Session()
@@ -329,10 +394,8 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
 
     for box in boxes:
         p = box["page"]
-        x1f, y1f = deg2tile(box["north"], box["west"], zoom)
-        x2f, y2f = deg2tile(box["south"], box["east"], zoom)
-        x0, x1 = math.floor(x1f), math.ceil(x2f)
-        y0, y1 = math.floor(y1f), math.ceil(y2f)
+        ext = page_extent(box, zoom, tile_px)
+        x0, x1, y0, y1 = ext["tiles"]
         n_tiles = (x1 - x0) * (y1 - y0)
         if verbose:
             print(f"Page {p}: {provider} zoom {zoom}, {n_tiles} tiles "
@@ -350,13 +413,13 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
                 f"(Refusing to write a mostly-blank basemap image.)"
             )
 
+        mosaic = mosaic.crop(ext["crop"])  # exactly the panel-filling box
         img_path = out_dir / f"page{p}_raw.jpg"
         mosaic.save(img_path, quality=92)
 
-        bounds_out[p] = dict(
-            west=tile2lon(x0, zoom), east=tile2lon(x1, zoom),
-            north=tile2lat(y0, zoom), south=tile2lat(y1, zoom),
-        )
+        bounds_out[p] = dict(west=ext["west"], east=ext["east"], north=ext["north"],
+                             south=ext["south"], d0=box["d0"], d1=box["d1"],
+                             split="custom" if splits else "equal")
         if verbose:
             warn = f" ({n_failed} tile(s) failed)" if n_failed else ""
             print(f"-> {img_path.name} ({mosaic.width}x{mosaic.height}px){warn}")
@@ -396,6 +459,9 @@ def main():
                      help="Mapbox style ID, e.g. mapbox/outdoors-v12 (default) or your own username/style-id")
     ap.add_argument("--maptiler-map-id", default=None,
                      help="MapTiler map ID (default: topo-v4 — see module docstring if this 404s)")
+    ap.add_argument("--splits", type=parse_splits, default=None,
+                     help="Comma-separated km where pages end, e.g. 12.4,31.0 (overrides --pages: "
+                          "pages = number of splits + 1). Default: equal-distance split.")
     ap.add_argument("--pad-deg", type=float, default=0.02, help="Lat/lon padding around each page's track (default: 0.02)")
     ap.add_argument("--workers", type=int, default=4, help="Concurrent tile downloads (keep modest, default: 4)")
     ap.add_argument("--out-dir", default=None, help="Output folder (default: work/<slug>_basemaps)")
@@ -413,7 +479,8 @@ def main():
 
     fetch_all_pages(data, out_dir, n_pages=args.pages, zoom=args.zoom,
                      pad_deg=args.pad_deg, workers=args.workers,
-                     provider=args.provider, api_key=args.api_key, style_id=style_id)
+                     provider=args.provider, api_key=args.api_key, style_id=style_id,
+                     splits=args.splits)
 
     attribution = PROVIDERS[args.provider]["attribution"]
     print(f"\nSaved basemap mosaics + bounds -> {out_dir}")

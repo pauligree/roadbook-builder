@@ -29,9 +29,73 @@ const isStyleField = (name) => form.elements[name]?.dataset?.style !== undefined
 function readOptions() {
   const o = {};
   for (const [k, v] of new FormData(form).entries()) if (!isStyleField(k)) o[k] = v;
-  o.pages = +o.pages; o.zoom = +o.zoom; o.waypoint_radius_m = +o.waypoint_radius_m;
+  o.pages = +form.elements.pages.value;  // read directly: disabled fields skip FormData
+  o.zoom = +o.zoom; o.waypoint_radius_m = +o.waypoint_radius_m;
+  // custom split, once this file has one (until then the equal split
+  // is analyzed and seeds it, see renderSplitList)
+  if (o.split_mode === "waypoints" && splitStore[state.file]) {
+    o.splits = fileSplits();
+    if (!o.splits.length) o.pages = 1;  // no page ends chosen = one page
+  }
+  delete o.split_mode;
   return o;
 }
+
+// ---- custom page split, per GPX file -----------------------------------
+// {file: [km, ...]} — distances of the waypoints chosen as page ends.
+const SPLITS_KEY = "roadbook.splits";
+let splitStore = {};
+try { splitStore = JSON.parse(localStorage.getItem(SPLITS_KEY) || "{}"); } catch (_) {}
+const fileSplits = () => splitStore[state.file] || [];
+function setFileSplits(kms) {
+  splitStore[state.file] = [...new Set(kms.map((k) => +k.toFixed(3)))].sort((a, b) => a - b);
+  try { localStorage.setItem(SPLITS_KEY, JSON.stringify(splitStore)); } catch (_) {}
+}
+const splitMode = () => form.elements.split_mode.value;
+
+// Waypoints a page may end at: all but the very start/finish of the track.
+const splitCandidates = (d) => d.pois.filter((p) => p.km > 0.5 && p.km < d.stats.total_km - 0.5);
+
+// First switch to custom on a file: start from the waypoints nearest to the
+// current equal-distance page ends, so the split doesn't jump.
+function seedSplits(d) {
+  if (splitStore[state.file] || !d) return;
+  const cands = splitCandidates(d);
+  const seeds = d.pages.slice(0, -1).map((pg) =>
+    cands.reduce((best, p) => (!best || Math.abs(p.km - pg.d1) < Math.abs(best.km - pg.d1) ? p : best), null));
+  setFileSplits(seeds.filter(Boolean).map((p) => p.km));
+}
+
+function renderSplitList() {
+  const d = state.data, custom = splitMode() === "waypoints";
+  $("splitField").hidden = !d || (!custom && +form.elements.pages.value < 2);
+  form.elements.pages.disabled = custom;
+  const list = $("splitList");
+  list.hidden = !custom || !d;
+  if (list.hidden) return;
+  if (!splitStore[state.file]) { seedSplits(d); scheduleAnalyze(0); return; }
+  const cands = splitCandidates(d);
+  if (!cands.length) { list.innerHTML = `<small class="note">No waypoints on this track.</small>`; return; }
+  // each saved km ticks only its nearest waypoint (kms shift slightly
+  // when the waypoint radius changes)
+  const ticked = new Set(fileSplits().map((k) =>
+    cands.reduce((best, p) => (Math.abs(p.km - k) < Math.abs(best.km - k) ? p : best))));
+  const pageEnding = (km) => d.pages.findIndex((pg) => Math.abs(pg.d1 - km) < 0.01);
+  list.innerHTML = cands.map((p) => {
+    const on = ticked.has(p);
+    const i = on ? pageEnding(p.km) : -1;
+    return `<label><input type="checkbox" data-km="${p.km}"${on ? " checked" : ""}>` +
+      `<span class="km">${p.km.toFixed(1)} km</span><span>${escapeHtml(p.name)}</span>` +
+      `${i >= 0 ? `<span class="pg">end p.${i + 1}</span>` : ""}</label>`;
+  }).join("");
+}
+
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+$("splitList").addEventListener("change", () => {
+  setFileSplits([...$("splitList").querySelectorAll("input:checked")].map((c) => +c.dataset.km));
+  scheduleAnalyze(60);
+});
 
 // Same keys as render_pages.DEFAULT_STYLE
 function readStyle() {
@@ -90,7 +154,7 @@ const labelKey = (where, pnum, which) => `${where}:${pnum}:${typeof which === "s
 
 function syncOptionLabels() {
   const o = readOptions();
-  $("pagesOut").textContent = o.pages;
+  $("pagesOut").textContent = o.splits && state.data ? state.data.n_pages : o.pages;
   $("zoomOut").textContent = o.zoom;
   $("radiusOut").textContent = o.waypoint_radius_m;
   const prov = state.providers?.find((p) => p.id === o.provider);
@@ -147,6 +211,7 @@ async function runAnalyze() {
     syncOptionLabels();
     updateLabelCount();
     updateNotes();
+    renderSplitList();
     renderStrip();
     renderSummary();
     draw();
@@ -215,7 +280,13 @@ function updateNotes() {
   const d = state.data; if (!d) return;
   const o = readOptions();
   const pn = $("pagesNote");
-  if (d.pages_forced_single) {
+  if (d.splits) {
+    pn.textContent = `${d.n_pages} page${d.n_pages > 1 ? "s" : ""} · split at ${d.splits.map((k) => k.toFixed(1)).join(", ")} km`;
+    pn.className = "note";
+  } else if (splitMode() === "waypoints") {
+    pn.textContent = "Tick waypoints below to end pages there.";
+    pn.className = "note";
+  } else if (d.pages_forced_single) {
     pn.textContent = "Filename contains “backup route” → always 1 page.";
     pn.className = "note warn";
   } else {
@@ -510,6 +581,7 @@ function drawPage(W, H) {
   const m = d.meta;
   label(m.race_title, hx, cellY(hr, 1.0), { size: pt(13), bold: true, bg: null });
   label(`Sector ${m.sector_code}: ${m.start_name} -> ${m.end_name}`, hx, cellY(hr, 0.40), { size: pt(10.5), bold: true, color: "#16213e", bg: null });
+  label(pg.subtitle, hx1, cellY(hr, 0.40), { size: pt(10.5), bold: true, color: "#2f3e8a", bg: null, align: "right" });
   label(`Part ${pg.page}/${d.n_pages} (${pg.d0.toFixed(1)}-${pg.d1.toFixed(1)} km)  |  Distance ${pg.length_km.toFixed(1)} km  |  ` +
         `D+ ${Math.round(pg.gain)} m  |  D- ${Math.round(pg.loss)} m  |  Elev min/max ${Math.round(pg.min_ele)}/${Math.round(pg.max_ele)} m`,
         hx, cellY(hr, -0.05), { size: pt(8), color: "#333", bg: null, mono: true });
@@ -746,6 +818,7 @@ form.addEventListener("input", (e) => {
   } else if (/^c_/.test(name)) syncPresetFromColors();
   syncOptionLabels(); saveOptions();
   if (isStyleField(name)) { draw(); return; }  // style: local redraw only
+  if (name === "pages") renderSplitList();
   // title only changes text; everything else changes page split / bounds
   scheduleAnalyze(name === "race_title" ? 300 : 120);
 });

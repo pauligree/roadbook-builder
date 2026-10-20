@@ -30,6 +30,7 @@ import argparse
 import json
 import math
 import pickle
+import re
 import textwrap
 from datetime import date
 from pathlib import Path
@@ -47,6 +48,8 @@ from matplotlib.transforms import Bbox
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from PIL import Image
 
+from roadbook.layout import GRID, HEIGHT_RATIOS, PAGE_SIZE_IN
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WORK_DIR = PROJECT_ROOT / "work"
 
@@ -58,8 +61,7 @@ GRADIENT_VMAX_CLIP = (15, 35)        # % grade range clipped for the color scale
 # against the white page.
 GRADIENT_COLORS = [(0, 0, 1), (0.5, 0, 0.5), (1, 0, 0)]   # blue -> purple -> red
 CMAP = LinearSegmentedColormap.from_list("blue_purple_red_grade", GRADIENT_COLORS)
-HEIGHT_RATIOS = [0.62, 7.88, 1.3, 0.2]   # header / map / profile / footer
-PAGE_SIZE_IN = (8.27, 11.69)         # A4 portrait
+# page geometry (HEIGHT_RATIOS, PAGE_SIZE_IN, GRID) lives in layout.py
 
 # Legibility backing for text drawn over the busy basemap/track. Earlier
 # versions used matplotlib path_effects.withStroke() (a white halo) for
@@ -110,6 +112,36 @@ def clean_name(name):
     for k, v in repl.items():
         name = name.replace(k, v)
     return name.strip(" -")
+
+
+def place_name(pois, km, total_km, start_name, end_name, near_km=0.3):
+    """Name of the waypoint at `km` (nearest within near_km). At the track's
+    start/finish, prefer a waypoint named START/FINISH (a loop has both at
+    km 0) and fall back to the GPX's start/end name; elsewhere fall back
+    to the distance."""
+    at_start, at_end = km < near_km, km > total_km - near_km
+    cands = [p for p in pois if abs(p[0] - km) <= near_km]
+    if at_start:
+        cands = [p for p in cands if "start" in p[1].lower()] or ([] if start_name else cands)
+    elif at_end:
+        cands = [p for p in cands if re.search(r"finish|arriv", p[1], re.I)] or ([] if end_name else cands)
+    if cands:
+        return min(cands, key=lambda p: abs(p[0] - km))[1]
+    if at_start and start_name:
+        return start_name
+    if at_end and end_name:
+        return end_name
+    return f"km {km:.1f}"
+
+
+def page_subtitle(d0, d1, custom, pois, total_km, start_name, end_name, max_len=32):
+    """Header subtitle: "km d0 → km d1" for an equal-distance split, the
+    start/end place names for a custom (waypoint) split."""
+    if not custom:
+        return f"km {d0:.1f} → km {d1:.1f}"
+    names = [place_name(pois, k, total_km, start_name, end_name) for k in (d0, d1)]
+    names = [n if len(n) <= max_len else n[:max_len - 1].rstrip() + "…" for n in names]
+    return " → ".join(names)
 
 
 def compute_gradient(eles, dist):
@@ -173,8 +205,7 @@ def build_page(mode, page, ctx):
     fig = plt.figure(figsize=PAGE_SIZE_IN)
     if is_vector:
         fig.patch.set_alpha(0.0)
-    gs = gridspec.GridSpec(4, 1, height_ratios=HEIGHT_RATIOS, hspace=0.10,
-                            top=0.985, bottom=0.012, left=0.025, right=0.975)
+    gs = gridspec.GridSpec(4, 1, height_ratios=HEIGHT_RATIOS, **GRID)
 
     # ---- HEADER ----
     ax_h = fig.add_subplot(gs[0])
@@ -184,6 +215,9 @@ def build_page(mode, page, ctx):
         ax_h.text(0, 1.0, race_title, fontsize=13, fontweight="bold", va="top", ha="left", color="#1a1a2e")
         ax_h.text(0, 0.40, f"Sector {sector_code}: {start_name} -> {end_name}", fontsize=10.5,
                    fontweight="bold", va="top", ha="left", color="#16213e")
+        ax_h.text(1.0, 0.40, page_subtitle(d0, d1, ctx["custom_split"], pois_all, d["total_dist_km"],
+                                           start_name, end_name),
+                  fontsize=10.5, fontweight="bold", va="top", ha="right", color="#2f3e8a")
         stats = (f"Part {pnum}/{n_pages} ({d0:.1f}-{d1:.1f} km)  |  "
                  f"Distance {seg_len:.1f} km  |  D+ {seg_gain:.0f} m  |  D- {seg_loss:.0f} m  |  "
                  f"Elev min/max {seg_min:.0f}/{seg_max:.0f} m")
@@ -210,6 +244,9 @@ def build_page(mode, page, ctx):
     # any track/label is drawn) so every pixel-based measurement below —
     # the POI-label collision test in particular — uses the axes' real,
     # final on-page transform instead of a transient pre-aspect-fix one.
+    # fetch_basemap.fill_panel() already sized the bounds to the panel's
+    # proportions, so this is a no-op to within a pixel and the map fills
+    # the whole panel.
     ax_m.set_aspect(1.0 / math.cos(math.radians(lat0)), adjustable="box", anchor="C")
     pos_m = ax_m.get_position()
     map_rect = dict(x0=pos_m.x0, y0=pos_m.y0, x1=pos_m.x1, y1=pos_m.y1)
@@ -478,7 +515,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("data_pkl", help="Output of parse_gpx.py")
     ap.add_argument("basemap_dir", help="Output folder of fetch_basemap.py (contains pageN_raw.jpg + bounds.json)")
-    ap.add_argument("--pages", type=int, default=4, help="Must match the --pages used in fetch_basemap.py (default: 4)")
+    ap.add_argument("--pages", type=int, default=4,
+                     help="Only used for basemap dirs older than bounds.json page edges (d0/d1); "
+                          "the page split is otherwise read from bounds.json (default: 4)")
     ap.add_argument("--race-title", default=None, help="Override the header race title (default: guessed from filename)")
     ap.add_argument("--out-dir", default=None, help="Output folder for the two intermediate PDFs (default: work/)")
     ap.add_argument("--style", default=None,
@@ -515,11 +554,18 @@ def main():
             if style["grade_colors"] else CMAP)
     norm = Normalize(vmin=-grad_vmax, vmax=grad_vmax)
 
-    n_pages = args.pages
-    edges = np.linspace(0, data["total_dist_km"], n_pages + 1)
+    pages_sorted = sorted(basemap_bounds)
+    if all("d0" in basemap_bounds[p] for p in pages_sorted):
+        # the split fetch_basemap actually used (equal or --splits)
+        edges = np.array([basemap_bounds[p]["d0"] for p in pages_sorted]
+                         + [basemap_bounds[pages_sorted[-1]]["d1"]])
+    else:
+        edges = np.linspace(0, data["total_dist_km"], args.pages + 1)
+    n_pages = len(edges) - 1
+    custom_split = any(basemap_bounds[p].get("split") == "custom" for p in pages_sorted)
 
     ctx = dict(
-        data=data, n_pages=n_pages, edges=edges, grad_all=grad_all,
+        data=data, n_pages=n_pages, edges=edges, custom_split=custom_split, grad_all=grad_all,
         cmap=cmap, norm=norm, basemap_bounds=basemap_bounds, basemap_imgs=basemap_imgs,
         race_title=args.race_title or data.get("race_title", "Roadbook"),
         pois_all=pois_all, attribution=attribution, style=style,

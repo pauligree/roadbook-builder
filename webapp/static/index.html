@@ -54,6 +54,17 @@
           <small id="pagesNote" class="note"></small>
         </label>
 
+        <div id="splitField" class="field">
+          <label class="field">
+            <span>Page split</span>
+            <select name="split_mode">
+              <option value="equal">Equal distance</option>
+              <option value="waypoints">Custom: end pages at waypoints</option>
+            </select>
+          </label>
+          <div id="splitList" class="split-list" hidden></div>
+        </div>
+
         <label class="field">
           <span>Tile zoom <output id="zoomOut">13</output></span>
           <input name="zoom" type="range" min="10" max="17" value="13">

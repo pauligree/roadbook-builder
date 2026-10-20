@@ -238,6 +238,23 @@ python -m roadbook.render_pages work/mytrack_data.pkl work/mytrack_basemaps --pa
 python -m roadbook.merge_layers work/mytrack_vector.pdf work/mytrack_basemaps output/mytrack_roadbook.pdf
 ```
 
+### Page split (`--splits`)
+
+By default the track is cut into `--pages` equal-distance pages. To end
+pages at specific points instead (e.g. at refuges), pass the distances in
+km — the page count becomes the number of splits + 1:
+
+```bash
+python -m roadbook.run_pipeline input/mytrack.gpx --splits 11.95,139.16
+```
+
+The web app does the same with *Page split → Custom*: tick the waypoints
+where pages should end. Each page header carries a subtitle: `km 41.5 →
+km 83.0` for an equal split, the start/end waypoint names (`Rif. Bonatti →
+Rif. Deffeyes`) for a custom one. Either way, each page's map is sized to fill the
+whole map panel (no blank bands) — the basemap box is grown to the panel's
+proportions around the page's track.
+
 ### Style file (`--style`)
 
 Label font, line widths, colour scale and hand-placed label positions can

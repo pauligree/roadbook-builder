@@ -43,6 +43,8 @@ render service in Phase 2 option A.
     panel, track segment, POI labels, profile, header/footer text, tile count
 - [x] Render button → progress → final PDF in browser + download
 - [x] Uploads (drag-drop), page strip, option persistence
+- [x] Map fills the whole map panel (basemap box grown to the panel's aspect, mosaic cropped to it)
+- [x] Page split: equal distance, or custom — end pages at chosen GPX waypoints
 - [x] Style panel: label font, track/profile line width, editable colour scale
       (presets + custom stops + range), draggable map/profile labels → PDF
 - [ ] Presets per race (save/load option sets)
@@ -57,10 +59,9 @@ render service in Phase 2 option A.
 
 Priority order:
 
-1. **Smart page split** — today equal-distance (`np.linspace` in
-   `page_bboxes`). Fit each page's bbox to the map panel aspect (full-bleed,
-   no side margins), consistent scale across pages, ~0.5 km overlap, snap
-   breaks near waypoints.
+1. **Smart page split** — ✅ full-bleed (bbox fitted to the map panel
+   aspect) and ✅ custom breaks at chosen waypoints (`--splits`). Still
+   open: consistent scale across pages, ~0.5 km overlap.
 2. **Fixed print scale** option (1:25k / 1:50k) + scale label; page count
    derived automatically.
 3. **Better label collision avoidance** — more candidate positions, leader
