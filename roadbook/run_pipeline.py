@@ -41,6 +41,7 @@ Equivalent to running, per GPX file, in order:
     python -m roadbook.merge_layers   work/<slug>_vector.pdf work/<slug>_basemaps output/<slug>_roadbook.pdf
 """
 import argparse
+import json
 import pickle
 import re
 import subprocess
@@ -109,6 +110,15 @@ def process_one(gpx_path: Path, args, out_override: Path = None, progress=None) 
            "--pages", str(n_pages)]
     if args.race_title:
         cmd += ["--race-title", args.race_title]
+    style = getattr(args, "style", None)
+    if style:
+        # a dict from the web app, or a JSON path from --style
+        if isinstance(style, dict):
+            style_path = WORK_DIR / f"{slug}_style.json"
+            with open(style_path, "w") as f:
+                json.dump(style, f, indent=2)
+            style = style_path
+        cmd += ["--style", str(style)]
     subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
 
     print("\n=== [4/4] Merging layers ===")
@@ -125,8 +135,9 @@ def main():
     ap.add_argument("gpx_path", help="A single .gpx file, OR a directory to scan for *.gpx files")
     ap.add_argument("--pages", type=int, default=4)
     ap.add_argument("--zoom", type=int, default=13)
-    ap.add_argument("--provider", choices=list(fetch_basemap.PROVIDERS), default="opentopomap",
-                     help="Tile provider (default: opentopomap, no API key needed). "
+    ap.add_argument("--provider", choices=list(fetch_basemap.PROVIDERS), default=None,
+                     help="Tile provider (default: maptiler if a MapTiler key is configured, "
+                          "else opentopomap, which needs no key). "
                           "mapbox/maptiler need --api-key (or the matching env var) and give "
                           "genuine retina tiles.")
     ap.add_argument("--api-key", default=None,
@@ -136,12 +147,16 @@ def main():
     ap.add_argument("--waypoint-radius-m", type=float, default=60.0)
     ap.add_argument("--tile-workers", type=int, default=4)
     ap.add_argument("--race-title", default=None)
+    ap.add_argument("--style", default=None,
+                     help="JSON file with style overrides (label font, line widths, colour scale, "
+                          "label offsets) — see DEFAULT_STYLE in render_pages.py")
     ap.add_argument("--out", default=None,
                      help="Final PDF path — single-file mode only (default: output/<slug>_roadbook.pdf)")
     ap.add_argument("--merge", action="store_true",
                      help="Directory mode only: also combine every succeeded sector's PDF into one "
                           "output/<race>_ALL.pdf, in filename order")
     args = ap.parse_args()
+    args.provider = args.provider or fetch_basemap.default_provider()
 
     target = Path(args.gpx_path).resolve()
 

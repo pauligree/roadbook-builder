@@ -10,3 +10,4 @@ input/*
 input-TORX/*
 !input/.gitkeep
 !input-TORX/.gitkeep
+config.local.json

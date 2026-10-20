@@ -15,7 +15,9 @@ Both share the same page-split / gradient code as the CLI, so the preview
 can't drift from what render_pages.py actually draws.
 """
 import math
-from dataclasses import asdict, dataclass, fields
+import re
+from dataclasses import asdict, dataclass, field, fields
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +30,48 @@ from roadbook.render_pages import (
 )
 
 PREVIEW_MAX_POINTS = 3000
+
+# Label fonts offered in the UI — kept to families that are common on macOS
+# and embed cleanly (as real, selectable text) via matplotlib's PDF backend.
+# Only the ones actually installed are offered; see available_fonts().
+LABEL_FONTS = [
+    "DejaVu Sans", "Helvetica", "Helvetica Neue", "Arial", "Arial Narrow",
+    "Avenir Next", "Avenir Next Condensed", "Futura", "Gill Sans", "Optima",
+    "Verdana", "Trebuchet MS", "Roboto", "Roboto Condensed", "Open Sans",
+    "Source Sans Pro", "Noto Sans", "PT Sans", "PT Sans Narrow", "Georgia",
+]
+HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+@lru_cache(maxsize=1)
+def available_fonts():
+    from matplotlib import font_manager
+    installed = {f.name for f in font_manager.fontManager.ttflist}
+    return [f for f in LABEL_FONTS if f in installed]
+
+
+def clean_style(s):
+    """Validate a style dict from a client into render_pages.DEFAULT_STYLE keys."""
+    s = s if isinstance(s, dict) else {}
+    out = {}
+    if s.get("label_font") in available_fonts() and s["label_font"] != "DejaVu Sans":
+        out["label_font"] = s["label_font"]
+    for key, lo, hi in (("track_width", 0.3, 6.0), ("profile_width", 0.3, 4.0)):
+        if s.get(key) not in (None, ""):
+            out[key] = min(hi, max(lo, float(s[key])))
+    colors = s.get("grade_colors")
+    if isinstance(colors, list) and len(colors) == 3 and all(isinstance(c, str) and HEX_COLOR.match(c) for c in colors):
+        out["grade_colors"] = colors
+    if s.get("grade_max"):
+        out["grade_max"] = min(60.0, max(2.0, float(s["grade_max"])))
+    offsets = s.get("label_offsets")
+    if isinstance(offsets, dict):
+        out["label_offsets"] = {
+            str(k)[:80]: [max(-500.0, min(500.0, float(v[0]))), max(-500.0, min(500.0, float(v[1])))]
+            for k, v in list(offsets.items())[:1000]
+            if isinstance(v, (list, tuple)) and len(v) == 2
+        }
+    return out
 PAD_DEG = 0.02  # same default as fetch_basemap.page_bboxes / run_pipeline
 
 
@@ -35,12 +79,13 @@ PAD_DEG = 0.02  # same default as fetch_basemap.page_bboxes / run_pipeline
 class RenderOptions:
     pages: int = 4
     zoom: int = 13
-    provider: str = "opentopomap"
+    provider: str | None = None  # None -> fetch_basemap.default_provider()
     api_key: str | None = None
     style_id: str | None = None
     waypoint_radius_m: float = 60.0
     race_title: str | None = None
     tile_workers: int = 4
+    style: dict = field(default_factory=dict)  # see render_pages.DEFAULT_STYLE / clean_style()
 
     @classmethod
     def from_dict(cls, d):
@@ -49,6 +94,8 @@ class RenderOptions:
         opts.pages = max(1, min(int(opts.pages), 20))
         opts.zoom = max(8, min(int(opts.zoom), 17))
         opts.waypoint_radius_m = max(1.0, float(opts.waypoint_radius_m))
+        opts.style = clean_style(opts.style)
+        opts.provider = opts.provider or fetch_basemap.default_provider()
         if opts.provider not in fetch_basemap.PROVIDERS:
             raise ValueError(f"Unknown provider {opts.provider!r}")
         return opts
@@ -61,7 +108,7 @@ class RenderOptions:
             mapbox_style=d["style_id"] if d["provider"] == "mapbox" else None,
             maptiler_map_id=d["style_id"] if d["provider"] == "maptiler" else None,
             waypoint_radius_m=d["waypoint_radius_m"], tile_workers=d["tile_workers"],
-            race_title=d["race_title"],
+            race_title=d["race_title"], style=d["style"],
         )
 
 

@@ -145,7 +145,8 @@ between.
 
 ### Retina/HiDPI tiles via `--provider mapbox` or `--provider maptiler`
 
-OpenTopoMap (the default provider) does not serve a genuine `@2x` tile
+OpenTopoMap (the default provider when no MapTiler key is configured — see
+`config.local.json` below) does not serve a genuine `@2x` tile
 variant — its tiles come at one fixed pixel density regardless of screen
 DPI (confirmed against the OSM wiki's tile provider comparison, which
 lists retina support explicitly for other providers but not for
@@ -203,6 +204,12 @@ python -m roadbook.run_pipeline input/mytrack.gpx --provider maptiler
   [cloud.maptiler.com/maps/](https://cloud.maptiler.com/maps/) (in your
   MapTiler account) for the current outdoor map's ID and pass it with
   `--maptiler-map-id`.
+- To avoid exporting the key every time, put it (and optionally your own
+  map ID) in `config.local.json` at the project root — gitignored, used by
+  both the CLI and the web app when no `--api-key` / env var is given:
+  `{"maptiler": {"api_key": "xxxx", "style_id": "<map id>"}}`
+  With a MapTiler key configured (here or via the env var), **maptiler
+  becomes the default provider** for both the CLI and the web app.
 - Also requests genuine 512×512px `@2x` retina tiles on the same tile grid
   as OpenTopoMap — no other tile math changes.
 - Attribution requirement is `© MapTiler © OpenStreetMap contributors`
@@ -230,6 +237,33 @@ Then:
 python -m roadbook.render_pages work/mytrack_data.pkl work/mytrack_basemaps --pages 4
 python -m roadbook.merge_layers work/mytrack_vector.pdf work/mytrack_basemaps output/mytrack_roadbook.pdf
 ```
+
+### Style file (`--style`)
+
+Label font, line widths, colour scale and hand-placed label positions can
+also be set per render with a JSON file — this is what the web app's
+*Style* panel sends:
+
+```json
+{
+  "label_font": "Avenir Next Condensed",
+  "track_width": 2.0,
+  "profile_width": 1.2,
+  "grade_colors": ["#1a9850", "#e6c229", "#d73027"],
+  "grade_max": 25,
+  "label_offsets": {"map:1:12.40": [-90, 20], "prof:1:12.40": [10, -30]}
+}
+```
+
+```bash
+python -m roadbook.run_pipeline input/mytrack.gpx --style mystyle.json
+```
+
+Every key is optional (see `DEFAULT_STYLE` in `render_pages.py`).
+`label_offsets` keys are `map|prof:<page>:<km of the POI>` (or
+`map:<page>:start|end`); values are points from the labelled point to the
+label's top-left corner, y down. In the web app you set them by dragging
+labels in *Page layout* — they're remembered per GPX file in the browser.
 
 ## 5. Using the output
 

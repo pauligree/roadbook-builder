@@ -22,7 +22,7 @@ import argparse
 import json
 from pathlib import Path
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 
 
 def _place_sector_pages(out, ocg_raster, ocg_vector, vector_path, basemap_dir):

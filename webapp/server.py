@@ -69,8 +69,20 @@ def list_files():
 
 @app.get("/api/providers")
 def providers():
-    return [dict(id=k, needs_key=v["needs_key"], default_style=v.get("default_style"))
+    def has_key(k):  # never send the key itself to the browser
+        try:
+            return bool(fetch_basemap.resolve_api_key(k, None))
+        except fetch_basemap.BasemapFetchError:
+            return False
+    return [dict(id=k, needs_key=v["needs_key"], default_style=v.get("default_style"),
+                 has_key=v["needs_key"] and has_key(k),
+                 default=k == fetch_basemap.default_provider())
             for k, v in fetch_basemap.PROVIDERS.items()]
+
+
+@app.get("/api/fonts")
+def fonts():
+    return api.available_fonts()
 
 
 @app.post("/api/upload")
@@ -121,6 +133,12 @@ def _run_job(job_id, gpx, opts):
 def render(req: JobRequest):
     gpx = resolve_gpx(req.file)
     opts = parse_options(req.options)
+    try:  # fail before queueing, not after the parse step
+        fetch_basemap.resolve_api_key(opts.provider, opts.api_key)
+    except fetch_basemap.BasemapFetchError:
+        env = fetch_basemap.PROVIDERS[opts.provider]["key_env_var"]
+        raise HTTPException(400, f"{opts.provider} needs an API key: enter it under Map provider, "
+                                 f"or set {env} before starting the server.")
     job_id = uuid.uuid4().hex[:12]
     _jobs[job_id] = dict(id=job_id, file=gpx.name, status="queued", step=0, total=4,
                          message="Queued", log=[], pdf=None)

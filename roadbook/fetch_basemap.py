@@ -9,7 +9,7 @@ geographic bounds for later alignment with the track.
 
 Three tile providers are supported (--provider):
 
-  opentopomap (default)  Free, no API key. Standard 256px tiles, no genuine
+  opentopomap            Free, no API key. Standard 256px tiles, no genuine
                           retina/@2x variant — see README.md §3 for why.
   mapbox                 Needs a Mapbox access token (--api-key, or set the
                           MAPBOX_ACCESS_TOKEN environment variable). Uses the
@@ -69,6 +69,14 @@ Usage:
     python -m roadbook.fetch_basemap work/..._data.pkl --provider mapbox --api-key pk.xxxx
     MAPBOX_ACCESS_TOKEN=pk.xxxx python -m roadbook.fetch_basemap work/..._data.pkl --provider mapbox
     MAPTILER_API_KEY=xxxx python -m roadbook.fetch_basemap work/..._data.pkl --provider maptiler
+
+Default provider: maptiler when a MapTiler key is available (env var or
+config.local.json), otherwise opentopomap — see default_provider().
+
+Local defaults: config.local.json in the project root (gitignored) can hold a
+per-provider key and default style, used when neither --api-key nor the env
+var is set:
+    {"maptiler": {"api_key": "xxxx", "style_id": "<map id>"}}
 """
 import argparse
 import io
@@ -117,6 +125,21 @@ PROVIDERS = {
     ),
 }
 
+LOCAL_CONFIG_PATH = PROJECT_ROOT / "config.local.json"
+
+
+def _load_local_config():
+    try:
+        return json.loads(LOCAL_CONFIG_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+LOCAL_CONFIG = _load_local_config()
+for _name, _local in LOCAL_CONFIG.items():
+    if _name in PROVIDERS and _local.get("style_id"):
+        PROVIDERS[_name]["default_style"] = _local["style_id"]
+
 
 def deg2tile(lat, lon, zoom):
     lat_rad = math.radians(lat)
@@ -135,6 +158,16 @@ def tile2lat(y, z):
     return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
 
 
+def default_provider():
+    """maptiler if a key is configured, else the keyless opentopomap, so a
+    fresh checkout without credentials still works out of the box."""
+    try:
+        resolve_api_key("maptiler", None)
+        return "maptiler"
+    except BasemapFetchError:
+        return "opentopomap"
+
+
 def resolve_api_key(provider, api_key_arg):
     """Fail fast (before fetching any tiles) if a provider needs a key and
     none was given, rather than surfacing it as a wall of failed-tile
@@ -142,11 +175,12 @@ def resolve_api_key(provider, api_key_arg):
     cfg = PROVIDERS[provider]
     if not cfg["needs_key"]:
         return None
-    key = api_key_arg or os.environ.get(cfg["key_env_var"])
+    key = (api_key_arg or os.environ.get(cfg["key_env_var"])
+           or LOCAL_CONFIG.get(provider, {}).get("api_key"))
     if not key:
         raise BasemapFetchError(
-            f"--provider {provider} requires an API key. Pass --api-key, or set the "
-            f"{cfg['key_env_var']} environment variable."
+            f"--provider {provider} requires an API key. Pass --api-key, set the "
+            f"{cfg['key_env_var']} environment variable, or add it to config.local.json."
         )
     return key
 
@@ -258,7 +292,7 @@ class BasemapFetchError(RuntimeError):
 
 def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
                      verbose=True, max_failed_fraction=0.5,
-                     provider="opentopomap", api_key=None, style_id=None, on_page=None):
+                     provider=None, api_key=None, style_id=None, on_page=None):
     """Fetch+stitch the basemap mosaic for every page and write
     pageN_raw.jpg + bounds.json + provider.json into out_dir. Returns the
     bounds dict. This is the single implementation used by both the CLI
@@ -276,6 +310,7 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
     missing/invalid API key or bad style/map ID for a keyed provider) rather
     than silently writing a blank white basemap image.
     """
+    provider = provider or default_provider()
     if provider not in PROVIDERS:
         raise ValueError(f"Unknown provider {provider!r} — choose from {list(PROVIDERS)}")
     cfg = PROVIDERS[provider]
@@ -349,8 +384,9 @@ def main():
                           "(more real detail — trails, spot elevations — but smaller, denser labels "
                           "when a wide area is squeezed onto one page). Raise it if you want more "
                           "real terrain detail, not for bigger text. ~4x more tiles per extra level.")
-    ap.add_argument("--provider", choices=list(PROVIDERS), default="opentopomap",
-                     help="Tile provider (default: opentopomap, no API key needed). "
+    ap.add_argument("--provider", choices=list(PROVIDERS), default=None,
+                     help="Tile provider (default: maptiler if a MapTiler key is configured, "
+                          "else opentopomap, which needs no key). "
                           "mapbox/maptiler need --api-key (or the matching env var) and give "
                           "genuine retina tiles — see module docstring.")
     ap.add_argument("--api-key", default=None,
@@ -364,6 +400,7 @@ def main():
     ap.add_argument("--workers", type=int, default=4, help="Concurrent tile downloads (keep modest, default: 4)")
     ap.add_argument("--out-dir", default=None, help="Output folder (default: work/<slug>_basemaps)")
     args = ap.parse_args()
+    args.provider = args.provider or default_provider()
 
     data_pkl = Path(args.data_pkl)
     with open(data_pkl, "rb") as f:

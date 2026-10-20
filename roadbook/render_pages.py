@@ -72,6 +72,35 @@ PAGE_SIZE_IN = (8.27, 11.69)         # A4 portrait
 LABEL_BG = dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.75)
 LABEL_BG_DARK = dict(boxstyle="round,pad=0.12", facecolor="black", edgecolor="none", alpha=0.55)
 
+# ---- per-render style (--style JSON) ------------------------------------
+# Defaults reproduce the look above exactly. The web app's style panel
+# writes a JSON with any subset of these keys (see roadbook/api.py
+# clean_style() for the accepted ranges).
+DEFAULT_STYLE = dict(
+    label_font=None,     # font family for map + profile labels; None = matplotlib default
+    track_width=1.4,     # pt, gradient-coloured map track (dark casing drawn 0.9 pt wider)
+    profile_width=0.9,   # pt, gradient-coloured profile line (dark casing 0.6 pt wider)
+    grade_colors=None,   # [descent, flat, climb] colours; None = GRADIENT_COLORS
+    grade_max=None,      # % grade drawn at full colour; None = auto (97th percentile, clipped)
+    label_offsets={},    # {label key: [dx, dy]} — dragged labels, see label_key()
+)
+
+
+def load_style(path=None):
+    style = dict(DEFAULT_STYLE)
+    if path:
+        with open(path) as f:
+            style.update({k: v for k, v in json.load(f).items() if k in DEFAULT_STYLE and v is not None})
+    return style
+
+
+def label_key(where, pnum, which):
+    """Id of a draggable label: where = "map" | "prof", which = "start" /
+    "end" or the POI's km. Must match labelKey() in webapp/static/app.js.
+    The stored offset [dx, dy] is in points from the labelled point to the
+    label's top-left corner, y pointing DOWN (screen convention)."""
+    return f"{where}:{pnum}:{which if isinstance(which, str) else f'{which:.2f}'}"
+
 
 def clean_name(name):
     repl = {
@@ -108,6 +137,9 @@ def build_page(mode, page, ctx):
     sector_code, start_name, end_name = d["sector_code"], d["start_name"], d["end_name"]
     version, update_tag = d["version"], d["update_tag"]
     pois_all = ctx["pois_all"]
+    style = ctx["style"]
+    font_kw = dict(fontfamily=style["label_font"]) if style["label_font"] else {}
+    offsets = style["label_offsets"]
     dist_km = dist / 1000.0
 
     pnum = page + 1
@@ -202,12 +234,12 @@ def build_page(mode, page, ctx):
         for gy in np.arange(math.floor(ymin / dlat) * dlat, ymax, dlat):
             ax_m.axhline(gy, color="white", linewidth=0.5, alpha=0.5, zorder=1)
 
-        ax_m.plot(seg_lon, seg_lat, color="#1a1a1a", linewidth=2.3, solid_capstyle="round",
+        ax_m.plot(seg_lon, seg_lat, color="#1a1a1a", linewidth=style["track_width"] + 0.9, solid_capstyle="round",
                   solid_joinstyle="round", zorder=2)
 
         pts_xy = np.array([seg_lon, seg_lat]).T.reshape(-1, 1, 2)
         segs = np.concatenate([pts_xy[:-1], pts_xy[1:]], axis=1)
-        lc = LineCollection(segs, cmap=cmap, norm=norm, linewidth=1.4, zorder=3,
+        lc = LineCollection(segs, cmap=cmap, norm=norm, linewidth=style["track_width"], zorder=3,
                              capstyle="round", joinstyle="round")
         lc.set_array(seg_grad)
         ax_m.add_collection(lc)
@@ -219,13 +251,22 @@ def build_page(mode, page, ctx):
 
         ax_m.scatter([seg_lon[0]], [seg_lat[0]], marker="o", s=70, facecolor="#1b8a3a",
                      edgecolor="white", linewidth=1.2, zorder=6)
-        ann_start = ax_m.annotate(start_label, (seg_lon[0], seg_lat[0]), xytext=(8, 10), textcoords="offset points",
+        def text_pos(key, default_xytext, ha="left", va="baseline"):
+            """annotate() placement: the dragged offset if there is one, else the default."""
+            off = offsets.get(key)
+            if off:
+                return dict(xytext=(off[0], -off[1]), ha="left", va="top")
+            return dict(xytext=default_xytext, ha=ha, va=va)
+
+        ann_start = ax_m.annotate(start_label, (seg_lon[0], seg_lat[0]), textcoords="offset points",
+                                   **text_pos(label_key("map", pnum, "start"), (8, 10)), **font_kw,
                                    fontsize=8.5, fontweight="bold", color="#1b8a3a", zorder=8,
                                    bbox=LABEL_BG)
 
         ax_m.scatter([seg_lon[-1]], [seg_lat[-1]], marker="o", s=70, facecolor="#c0392b",
                      edgecolor="white", linewidth=1.2, zorder=6)
-        ann_end = ax_m.annotate(end_label, (seg_lon[-1], seg_lat[-1]), xytext=(8, 10), textcoords="offset points",
+        ann_end = ax_m.annotate(end_label, (seg_lon[-1], seg_lat[-1]), textcoords="offset points",
+                                 **text_pos(label_key("map", pnum, "end"), (8, 10)), **font_kw,
                                  fontsize=8.5, fontweight="bold", color="#c0392b", zorder=8,
                                  bbox=LABEL_BG)
 
@@ -273,19 +314,32 @@ def build_page(mode, page, ctx):
         vsteps = [10, 24, 38, 54, 70, -10, -24, -38, -54, -70]
         off_panel_penalty = 1e7  # dwarfs any real overlap area, but finite so "least-bad" logic still orders correctly
 
-        def place_poi_label(label, ha, dx, dy):
+        def place_poi_label(label, ha, dx, dy, va="baseline"):
             return ax_m.annotate(
                 label, (px, py), xytext=(dx, dy), textcoords="offset points",
-                fontsize=8, color="#1a1a2e", ha=ha, zorder=8,
+                fontsize=8, color="#1a1a2e", ha=ha, va=va, zorder=8, **font_kw,
                 bbox=LABEL_BG,
                 arrowprops=dict(arrowstyle="-", color="#333333", linewidth=0.5,
                                  connectionstyle="arc3,rad=0.0", shrinkA=0, shrinkB=0),
             )
 
+        # Dragged labels go first, so the automatic search below treats
+        # them as fixed obstacles instead of landing on top of them.
+        auto_pois = []
         for (km, name, plat, plon, pele) in page_pois:
             px, py = plon, plat
             ax_m.scatter([px], [py], marker="o", s=32, facecolor="#c0392b", edgecolor="white",
                          linewidth=1.0, zorder=7)
+            label = f"{name}\n{km:.1f} km - {pele:.0f} m"
+            off = offsets.get(label_key("map", pnum, km))
+            if off:
+                ann = place_poi_label(label, "left", off[0], -off[1], va="top")
+                obstacle_boxes.append(ann.get_window_extent(renderer=renderer))
+            else:
+                auto_pois.append((km, name, plat, plon, pele))
+
+        for (km, name, plat, plon, pele) in auto_pois:
+            px, py = plon, plat
             label = f"{name}\n{km:.1f} km - {pele:.0f} m"
 
             sides = ["right", "left"] if px <= mid_x else ["left", "right"]
@@ -302,6 +356,8 @@ def build_page(mode, page, ctx):
                     if not fits_panel:
                         penalty += off_panel_penalty
                     if penalty == 0.0:
+                        if best is not None:
+                            best[1].remove()  # drop the earlier least-bad candidate
                         chosen = (ann, box)
                         break
                     if best is None or penalty < best[0]:
@@ -361,11 +417,11 @@ def build_page(mode, page, ctx):
         ax_e.axis("off")
     else:
         ax_e.set_facecolor("none")
-        ax_e.plot(seg_dist, seg_ele, color="#1a1a1a", linewidth=1.5, solid_capstyle="round",
+        ax_e.plot(seg_dist, seg_ele, color="#1a1a1a", linewidth=style["profile_width"] + 0.6, solid_capstyle="round",
                   solid_joinstyle="round", zorder=2)
         epts = np.array([seg_dist, seg_ele]).T.reshape(-1, 1, 2)
         esegs = np.concatenate([epts[:-1], epts[1:]], axis=1)
-        elc = LineCollection(esegs, cmap=cmap, norm=norm, linewidth=0.9, zorder=3,
+        elc = LineCollection(esegs, cmap=cmap, norm=norm, linewidth=style["profile_width"], zorder=3,
                               capstyle="round", joinstyle="round")
         elc.set_array(seg_grad)
         ax_e.add_collection(elc)
@@ -378,8 +434,12 @@ def build_page(mode, page, ctx):
                 lines = lines[:2]
                 lines[-1] = lines[-1] + "..."
             wrapped = "\n".join(lines)
-            ax_e.annotate(wrapped, xy=(km, pele), xytext=(0, 5), textcoords="offset points",
-                          rotation=0, fontsize=6.5, ha="center", va="bottom", color="#1a1a2e",
+            off = offsets.get(label_key("prof", pnum, km))
+            pos = (dict(xytext=(off[0], -off[1]), ha="left", va="top",
+                        arrowprops=dict(arrowstyle="-", color="#888888", linewidth=0.4, shrinkA=0, shrinkB=0))
+                   if off else dict(xytext=(0, 5), ha="center", va="bottom"))
+            ax_e.annotate(wrapped, xy=(km, pele), textcoords="offset points", **pos, **font_kw,
+                          rotation=0, fontsize=6.5, color="#1a1a2e",
                           linespacing=1.15, zorder=5,
                           bbox=LABEL_BG)
             ax_e.scatter([km], [pele], s=8, facecolor="#2c3e50", edgecolor="white", linewidth=0.4, zorder=6)
@@ -421,6 +481,8 @@ def main():
     ap.add_argument("--pages", type=int, default=4, help="Must match the --pages used in fetch_basemap.py (default: 4)")
     ap.add_argument("--race-title", default=None, help="Override the header race title (default: guessed from filename)")
     ap.add_argument("--out-dir", default=None, help="Output folder for the two intermediate PDFs (default: work/)")
+    ap.add_argument("--style", default=None,
+                     help="JSON file overriding DEFAULT_STYLE (label font, line widths, colour scale, label offsets)")
     args = ap.parse_args()
 
     data_pkl = Path(args.data_pkl)
@@ -444,8 +506,13 @@ def main():
     pois_all = [(km, clean_name(name), plat, plon, pele) for (km, name, plat, plon, pele) in data["pois"]]
 
     grad_all = compute_gradient(data["eles"], data["dist"])
-    grad_vmax = float(np.clip(np.percentile(np.abs(grad_all), 97), *GRADIENT_VMAX_CLIP))
-    cmap = CMAP
+    style = load_style(args.style)
+    if style["grade_max"]:
+        grad_vmax = float(style["grade_max"])
+    else:
+        grad_vmax = float(np.clip(np.percentile(np.abs(grad_all), 97), *GRADIENT_VMAX_CLIP))
+    cmap = (LinearSegmentedColormap.from_list("custom_grade", style["grade_colors"])
+            if style["grade_colors"] else CMAP)
     norm = Normalize(vmin=-grad_vmax, vmax=grad_vmax)
 
     n_pages = args.pages
@@ -455,7 +522,7 @@ def main():
         data=data, n_pages=n_pages, edges=edges, grad_all=grad_all,
         cmap=cmap, norm=norm, basemap_bounds=basemap_bounds, basemap_imgs=basemap_imgs,
         race_title=args.race_title or data.get("race_title", "Roadbook"),
-        pois_all=pois_all, attribution=attribution,
+        pois_all=pois_all, attribution=attribution, style=style,
     )
 
     slug = data_pkl.stem.replace("_data", "")

@@ -21,26 +21,72 @@ const state = {
 const form = $("opts");
 const STORE_KEY = "roadbook.options";
 
+// Fields marked data-style only change how things are drawn: they redraw
+// the preview locally and travel to the render as options.style, without
+// re-running /api/analyze.
+const isStyleField = (name) => form.elements[name]?.dataset?.style !== undefined;
+
 function readOptions() {
-  const f = new FormData(form);
-  const o = Object.fromEntries(f.entries());
+  const o = {};
+  for (const [k, v] of new FormData(form).entries()) if (!isStyleField(k)) o[k] = v;
   o.pages = +o.pages; o.zoom = +o.zoom; o.waypoint_radius_m = +o.waypoint_radius_m;
   return o;
 }
 
+// Same keys as render_pages.DEFAULT_STYLE
+function readStyle() {
+  const e = form.elements;
+  return {
+    label_font: e.label_font.value || null,
+    track_width: +e.track_width.value,
+    profile_width: +e.profile_width.value,
+    grade_colors: [e.c_desc.value, e.c_flat.value, e.c_climb.value],
+    grade_max: +e.grade_max.value || null,
+    label_offsets: state.file ? fileOffsets() : {},
+  };
+}
+
+const COLOR_PRESETS = {
+  default: ["Blue → purple → red", ["#0000ff", "#800080", "#ff0000"]],
+  traffic: ["Green → yellow → red", ["#1a9850", "#e6c229", "#d73027"]],
+  teal: ["Teal → grey → orange", ["#00897b", "#8d8d8d", "#ef6c00"]],
+  cool: ["Cyan → navy → magenta", ["#00b4d8", "#1d3557", "#e5007e"]],
+  mono: ["Black & white print", ["#b0b0b0", "#606060", "#000000"]],
+};
+
 function restoreOptions() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+    if (!saved._v) delete saved.provider;  // saved before the server-chosen default existed
     for (const [k, v] of Object.entries(saved)) if (form.elements[k] && k !== "api_key") form.elements[k].value = v;
   } catch (_) { /* storage unavailable: defaults are fine */ }
 }
 
 function saveOptions() {
   try {
-    const { api_key, ...rest } = readOptions();
-    localStorage.setItem(STORE_KEY, JSON.stringify(rest));
+    const { api_key, ...rest } = Object.fromEntries(new FormData(form).entries());
+    localStorage.setItem(STORE_KEY, JSON.stringify({ ...rest, _v: 2 }));
   } catch (_) {}
 }
+
+// ---- dragged label offsets, per GPX file -------------------------------
+// {file: {labelKey: [dx, dy]}} in points, label top-left relative to the
+// labelled point, y down — the format render_pages.py's --style expects.
+const LABELS_KEY = "roadbook.labels";
+let labelStore = {};
+try { labelStore = JSON.parse(localStorage.getItem(LABELS_KEY) || "{}"); } catch (_) {}
+
+function fileOffsets() { return (labelStore[state.file] ||= {}); }
+function saveLabels() {
+  try { localStorage.setItem(LABELS_KEY, JSON.stringify(labelStore)); } catch (_) {}
+  updateLabelCount();
+}
+function updateLabelCount() {
+  const n = state.file ? Object.keys(fileOffsets()).length : 0;
+  $("labelCount").textContent = n ? `${n} label${n > 1 ? "s" : ""} moved on this track` : "";
+}
+// Must match render_pages.label_key()
+const labelKey = (where, pnum, which) => `${where}:${pnum}:${typeof which === "string" ? which : which.toFixed(2)}`;
 
 function syncOptionLabels() {
   const o = readOptions();
@@ -49,7 +95,24 @@ function syncOptionLabels() {
   $("radiusOut").textContent = o.waypoint_radius_m;
   const prov = state.providers?.find((p) => p.id === o.provider);
   $("keyFields").hidden = !prov?.needs_key;
-  if (prov?.needs_key) form.elements.style_id.placeholder = prov.default_style || "";
+  if (prov?.needs_key) {
+    form.elements.style_id.placeholder = prov.default_style || "";
+    form.elements.api_key.placeholder = prov.has_key ? "********************  (saved on server)" : "or set env var on server";
+  }
+
+  state.style = readStyle();
+  $("trackOut").textContent = state.style.track_width.toFixed(1);
+  $("profileOut").textContent = state.style.profile_width.toFixed(1);
+  $("gradeOut").textContent = state.style.grade_max
+    ? `±${state.style.grade_max} %`
+    : `auto${state.data ? ` (±${state.data.grade_vmax.toFixed(0)} %)` : ""}`;
+  $("scalePreview").style.background = `linear-gradient(90deg, ${state.style.grade_colors.join(", ")})`;
+}
+
+function syncPresetFromColors() {
+  const cur = readStyle().grade_colors.join();
+  const hit = Object.entries(COLOR_PRESETS).find(([, [, c]]) => c.join() === cur);
+  form.elements.preset.value = hit ? hit[0] : "custom";
 }
 
 // ---- API ----------------------------------------------------------------
@@ -81,6 +144,8 @@ async function runAnalyze() {
     state.data = data;
     state.page = Math.min(state.page, data.n_pages - 1);
     $("renderBtn").disabled = !!state.job;
+    syncOptionLabels();
+    updateLabelCount();
     updateNotes();
     renderStrip();
     renderSummary();
@@ -211,12 +276,40 @@ const COLORS = () => {
            line: cs.getPropertyValue("--line").trim(), accent: cs.getPropertyValue("--accent").trim() };
 };
 
+const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+const gradeVmax = () => state.style.grade_max || state.data.grade_vmax;
+
 function gradeColor(g) {
-  const d = state.data, vmax = d.grade_vmax, stops = d.grade_colors;
+  const vmax = gradeVmax(), stops = state.style.grade_colors.map(hexRgb);
   let t = Math.max(0, Math.min(1, (g + vmax) / (2 * vmax))) * (stops.length - 1);
   const i = Math.min(Math.floor(t), stops.length - 2); t -= i;
-  const c = stops[i].map((v, k) => Math.round(255 * (v + (stops[i + 1][k] - v) * t)));
+  const c = stops[i].map((v, k) => Math.round(v + (stops[i + 1][k] - v) * t));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+// Canvas font for labels. Matplotlib's default (DejaVu Sans) is rarely
+// installed for the browser; Verdana is its closest common relative.
+function fontCss(size, bold, family) {
+  const fam = family ? `"${family}", ` : `"DejaVu Sans", Verdana, `;
+  return `${bold ? "700 " : ""}${size}px ${fam}-apple-system, Helvetica, sans-serif`;
+}
+
+// textwrap.fill(name, width=11) capped at 2 lines + "...", as render_pages does for profile labels
+function wrapProfileName(name) {
+  const lines = [];
+  let cur = "";
+  for (let w of name.split(/\s+/).filter(Boolean)) {
+    while (w.length > 11) {           // textwrap breaks over-long words
+      if (cur) { lines.push(cur); cur = ""; }
+      lines.push(w.slice(0, 11)); w = w.slice(11);
+    }
+    if (!cur) cur = w;
+    else if ((cur + " " + w).length <= 11) cur += " " + w;
+    else { lines.push(cur); cur = w; }
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > 2) { lines.length = 2; lines[1] += "..."; }
+  return lines.join("\n");
 }
 
 function mosaicPx(b, zoom, tilePx) {
@@ -273,10 +366,10 @@ function pagePois(pg) {
   return out;
 }
 
-function drawGradeLine(pts, idx, width) {
+function drawGradeLine(pts, idx, width, casing) {
   const t = state.data.track;
   ctx.lineCap = "round"; ctx.lineJoin = "round";
-  ctx.strokeStyle = "#1a1a1a"; ctx.lineWidth = width + 1.6;
+  ctx.strokeStyle = "#1a1a1a"; ctx.lineWidth = casing;
   ctx.beginPath();
   idx.forEach((i, k) => { const [x, y] = pts(i); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
   ctx.stroke();
@@ -294,8 +387,9 @@ function marker(x, y, r, fill) {
   ctx.lineWidth = Math.max(1, r * 0.3); ctx.strokeStyle = "#fff"; ctx.stroke();
 }
 
-function label(text, x, y, { size = 11, color = "#1a1a2e", bold = false, align = "left", bg = "rgba(255,255,255,.78)", mono = false } = {}) {
-  ctx.font = `${bold ? "700 " : ""}${size}px ${mono ? "ui-monospace, Menlo, monospace" : "-apple-system, Helvetica, sans-serif"}`;
+function label(text, x, y, { size = 11, color = "#1a1a2e", bold = false, align = "left", bg = "rgba(255,255,255,.78)", mono = false, font } = {}) {
+  ctx.font = font !== undefined ? fontCss(size, bold, font)
+    : `${bold ? "700 " : ""}${size}px ${mono ? "ui-monospace, Menlo, monospace" : "-apple-system, Helvetica, sans-serif"}`;
   const lines = String(text).split("\n");
   const w = Math.max(...lines.map((l) => ctx.measureText(l).width));
   const lh = size * 1.18, h = lh * lines.length;
@@ -362,7 +456,8 @@ function drawOverview(W, H) {
   }
 
   const all = t.km.map((_, i) => i);
-  drawGradeLine((i) => P(t.lon[i], t.lat[i]), all, 2.4);
+  const tw = state.style.track_width / 1.4;  // overview widths scale with the chosen track width
+  drawGradeLine((i) => P(t.lon[i], t.lat[i]), all, 2.4 * tw, 2.4 * tw + 1.6);
   for (const p of d.pois) { const [x, y] = P(p.lon, p.lat); marker(x, y, 3, "#c0392b"); }
   const n = t.km.length - 1;
   marker(...P(t.lon[0], t.lat[0]), 6, "#1b8a3a");
@@ -378,15 +473,25 @@ function drawOverview(W, H) {
     ctx.fillRect(X(p.d0), py0, X(p.d1) - X(p.d0), py1 - py0);
     label(`${i + 1}`, (X(p.d0) + X(p.d1)) / 2, py0 + 2, { size: 11, bold: true, color: col.muted, bg: null, align: "center" });
   });
-  drawGradeLine((i) => [X(t.km[i]), Y(t.ele[i])], all, 1.4);
+  drawGradeLine((i) => [X(t.km[i]), Y(t.ele[i])], all, 1.4 * tw, 1.4 * tw + 1.2);
   ctx.fillStyle = col.muted; ctx.font = "11px -apple-system, sans-serif"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
   ctx.fillText(`${Math.round(emax)} m`, px0 - 4, Y(emax)); ctx.fillText(`${Math.round(emin)} m`, px0 - 4, Y(emin));
   ctx.textAlign = "left"; ctx.textBaseline = "top";
   ctx.fillText(`${tot.toFixed(1)} km`, px1 - 40, py1 + 3);
 }
 
+function outlineIfActive(key, r) {
+  const active = state.drag?.key === key, hover = state.hoverLabel === key;
+  if (!active && !hover) return;
+  ctx.save();
+  ctx.strokeStyle = COLORS().accent; ctx.lineWidth = active ? 1.5 : 1; ctx.setLineDash(active ? [] : [3, 2]);
+  ctx.strokeRect(r.x0 - 1, r.y0 - 1, r.x1 - r.x0 + 2, r.y1 - r.y0 + 2);
+  ctx.restore();
+}
+
 function drawPage(W, H) {
   const d = state.data, pg = d.pages[state.page], o = readOptions();
+  state.hits = [];
   const [PW, PH] = d.layout.page_size_in;
   const s = Math.min((W - 40) / PW, (H - 40) / PH);          // px per inch
   const ox = (W - PW * s) / 2, oy = (H - PH * s) / 2;
@@ -440,42 +545,76 @@ function drawPage(W, H) {
   }
 
   const t = d.track, idx = pageTrack(pg);
-  drawGradeLine((i) => MP(t.lon[i], t.lat[i]), idx, pt(1.4));
+  drawGradeLine((i) => MP(t.lon[i], t.lat[i]), idx, pt(state.style.track_width), pt(state.style.track_width + 0.9));
 
-  // markers + labels (greedy collision avoidance, like render_pages)
-  const placed = [];
+  // markers + labels. Dragged labels (offsets in points, see labelKey) are
+  // placed first; automatic ones then avoid them — same order as render_pages.
+  // Labels are drawn after the map clip is released: the PDF doesn't clip them either.
+  const LF = state.style.label_font, ptpx = s / 72, offs = fileOffsets(), pnum = pg.page;
+  const placed = [], deferred = [];
+  const measure = (text, size, bold) => {
+    ctx.font = fontCss(size, bold, LF);
+    const lines = text.split("\n");
+    return { w: Math.max(...lines.map((l) => ctx.measureText(l).width)) + 4, h: size * 1.18 * lines.length + 2 };
+  };
+  // one draggable label: rect at text top-left (tx, ty), registered for hit-testing
+  const putLabel = (key, text, ax, ay, tx, ty, opts, leader) => {
+    const { w, h } = measure(text, opts.size, opts.bold);
+    const r = { x0: tx - 2, y0: ty - 1, x1: tx - 2 + w, y1: ty - 1 + h };
+    placed.push(r);
+    state.hits.push({ key, ...r, tx, ty, ax, ay, ptpx });
+    deferred.push(() => {
+      if (leader) {
+        const lx = ax < r.x0 ? r.x0 : ax > r.x1 ? r.x1 : ax, ly = ay < r.y0 ? r.y0 : ay > r.y1 ? r.y1 : ay;
+        ctx.strokeStyle = leader; ctx.lineWidth = pt(0.5);
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(lx, ly); ctx.stroke();
+      }
+      label(text, tx, ty, { ...opts, font: LF });
+      outlineIfActive(key, r);
+    });
+  };
+  const fromOffset = (key, ax, ay) => offs[key] && [ax + offs[key][0] * ptpx, ay + offs[key][1] * ptpx];
+
   const first = idx[0], last = idx[idx.length - 1];
   const isStart = state.page === 0, isEnd = state.page === d.n_pages - 1;
   const [sx0, sy0] = MP(t.lon[first], t.lat[first]), [ex0, ey0] = MP(t.lon[last], t.lat[last]);
   marker(sx0, sy0, pt(4.5), "#1b8a3a"); marker(ex0, ey0, pt(4.5), "#c0392b");
-  placed.push(label(isStart ? "START" : `${pg.d0.toFixed(1)} km\n(from part ${pg.page - 1})`, sx0 + pt(8), sy0 - pt(18), { size: pt(8.5), bold: true, color: "#1b8a3a" }));
-  placed.push(label(isEnd ? "FINISH" : `${pg.d1.toFixed(1)} km\n(continues part ${pg.page + 1})`, ex0 + pt(8), ey0 - pt(18), { size: pt(8.5), bold: true, color: "#c0392b" }));
 
   const pois = pagePois(pg);
-  const midX = mx + mw / 2;
   for (const p of pois) { const [x, y] = MP(p.lon, p.lat); marker(x, y, pt(3.2), "#c0392b"); }
-  for (const p of pois) {
-    const [x, y] = MP(p.lon, p.lat);
-    const text = `${p.name}\n${p.km.toFixed(1)} km - ${Math.round(p.ele)} m`;
-    const size = pt(8);
-    ctx.font = `${size}px -apple-system, Helvetica, sans-serif`;
-    const w = Math.max(...text.split("\n").map((l) => ctx.measureText(l).width)) + 4, h = size * 2.36 + 2;
+
+  const items = [
+    { key: labelKey("map", pnum, "start"), ax: sx0, ay: sy0, text: isStart ? "START" : `${pg.d0.toFixed(1)} km\n(from part ${pnum - 1})`,
+      opts: { size: pt(8.5), bold: true, color: "#1b8a3a" }, fixed: [sx0 + pt(8), sy0 - pt(18)] },
+    { key: labelKey("map", pnum, "end"), ax: ex0, ay: ey0, text: isEnd ? "FINISH" : `${pg.d1.toFixed(1)} km\n(continues part ${pnum + 1})`,
+      opts: { size: pt(8.5), bold: true, color: "#c0392b" }, fixed: [ex0 + pt(8), ey0 - pt(18)] },
+    ...pois.map((p) => {
+      const [x, y] = MP(p.lon, p.lat);
+      return { key: labelKey("map", pnum, p.km), ax: x, ay: y, text: `${p.name}\n${p.km.toFixed(1)} km - ${Math.round(p.ele)} m`,
+               opts: { size: pt(8) }, leader: "#333" };
+    }),
+  ];
+  for (const it of items) {
+    const at = fromOffset(it.key, it.ax, it.ay);
+    if (at) putLabel(it.key, it.text, it.ax, it.ay, at[0], at[1], it.opts, it.leader || null);  // start/finish: no leader, as in the PDF
+  }
+  const midX = mx + mw / 2;
+  for (const it of items.filter((it) => !offs[it.key])) {
+    if (it.fixed) { putLabel(it.key, it.text, it.ax, it.ay, it.fixed[0], it.fixed[1], it.opts, null); continue; }
+    const { w, h } = measure(it.text, it.opts.size);
     let best = null;
-    for (const side of x <= midX ? [1, -1] : [-1, 1]) {
+    for (const side of it.ax <= midX ? [1, -1] : [-1, 1]) {
       for (const dy of [10, 24, 38, 54, 70, -10, -24, -38, -54, -70]) {
-        const lx = side > 0 ? x + pt(12) : x - pt(12) - w, ly = y - pt(dy) - h / 2;
+        const lx = side > 0 ? it.ax + pt(12) : it.ax - pt(12) - w, ly = it.ay - pt(dy) - h / 2;
         const r = { x0: lx, y0: ly, x1: lx + w, y1: ly + h };
         const off = r.x0 < mx || r.x1 > mx + mw || r.y0 < my || r.y1 > my + mh;
         const hits = placed.filter((q) => overlaps(q, r)).length + (off ? 100 : 0);
-        if (!best || hits < best.hits) best = { r, hits, side };
+        if (!best || hits < best.hits) best = { r, hits };
         if (hits === 0) break;
       }
       if (best.hits === 0) break;
     }
-    const r = best.r;
-    ctx.strokeStyle = "#333"; ctx.lineWidth = pt(0.5);
-    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(best.side > 0 ? r.x0 : r.x1, (r.y0 + r.y1) / 2); ctx.stroke();
-    placed.push(label(text, r.x0 + 2, r.y0 + 1, { size }));
+    putLabel(it.key, it.text, it.ax, it.ay, best.r.x0 + 2, best.r.y0 + 1, it.opts, it.leader);
   }
 
   // scale bar, north arrow, colorbar, attribution
@@ -490,14 +629,16 @@ function drawPage(W, H) {
   label("N", nx, ny, { size: pt(10.5), bold: true, align: "center" });
   const cbx = mx + mw * (1 - 0.012 - 0.018), cby = my + mh * 0.02, cbh = mh * 0.28;
   const grad = ctx.createLinearGradient(0, cby + cbh, 0, cby);
-  d.grade_colors.forEach((c, i) => grad.addColorStop(i / (d.grade_colors.length - 1), `rgb(${c.map((v) => v * 255).join(",")})`));
+  state.style.grade_colors.forEach((c, i, all) => grad.addColorStop(i / (all.length - 1), c));
   ctx.fillStyle = grad; ctx.fillRect(cbx, cby, mw * 0.018, cbh);
   ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.strokeRect(cbx, cby, mw * 0.018, cbh);
-  label(`+${d.grade_vmax.toFixed(0)}%`, cbx - 3, cby, { size: pt(6.5), align: "right", bg: "rgba(0,0,0,.5)", color: "#fff" });
-  label(`-${d.grade_vmax.toFixed(0)}%`, cbx - 3, cby + cbh - pt(8), { size: pt(6.5), align: "right", bg: "rgba(0,0,0,.5)", color: "#fff" });
+  label(`+${gradeVmax().toFixed(0)}%`, cbx - 3, cby, { size: pt(6.5), align: "right", bg: "rgba(0,0,0,.5)", color: "#fff" });
+  label(`-${gradeVmax().toFixed(0)}%`, cbx - 3, cby + cbh - pt(8), { size: pt(6.5), align: "right", bg: "rgba(0,0,0,.5)", color: "#fff" });
   label(d.attribution, mx + mw * 0.01, my + mh * 0.99 - pt(9), { size: pt(6.5), color: "#fff", bg: "rgba(0,0,0,.55)" });
   ctx.restore();
   ctx.strokeStyle = "#1a1a2e"; ctx.lineWidth = pt(1); ctx.strokeRect(mx, my, mw, mh);
+  deferred.forEach((f) => f());
+  deferred.length = 0;
 
   // elevation profile (render_pages shifts it right by 0.045 and narrows by 0.055)
   const er = rows[2];
@@ -512,13 +653,21 @@ function drawPage(W, H) {
     ctx.strokeStyle = "#ddd"; ctx.lineWidth = pt(0.4);
     ctx.beginPath(); ctx.moveTo(EX(p.km), ey); ctx.lineTo(EX(p.km), ey + eh); ctx.stroke();
   }
-  drawGradeLine((i) => [EX(t.km[i]), EY(t.ele[i])], idx, pt(0.9));
-  for (const p of pois) {
-    const short = p.name.length > 22 ? p.name.slice(0, 20) + "..." : p.name;
-    label(short, EX(p.km), EY(p.ele) - pt(14), { size: pt(6.5), align: "center" });
-    marker(EX(p.km), EY(p.ele), pt(2), "#2c3e50");
-  }
+  drawGradeLine((i) => [EX(t.km[i]), EY(t.ele[i])], idx, pt(state.style.profile_width), pt(state.style.profile_width + 0.6));
+  for (const p of pois) marker(EX(p.km), EY(p.ele), pt(2), "#2c3e50");
   ctx.restore();
+  // profile labels: default centred just above the point (xytext=(0, 5), va="bottom")
+  for (const p of pois) {
+    const key = labelKey("prof", pnum, p.km), text = wrapProfileName(p.name), opts = { size: pt(6.5) };
+    const ax = EX(p.km), ay = EY(p.ele);
+    const at = fromOffset(key, ax, ay);
+    if (at) putLabel(key, text, ax, ay, at[0], at[1], opts, "#888");
+    else {
+      const { w, h } = measure(text, opts.size);
+      putLabel(key, text, ax, ay, ax - (w - 4) / 2, ay - pt(5) - (h - 2), opts, null);
+    }
+  }
+  deferred.forEach((f) => f());
   ctx.fillStyle = "#333"; ctx.font = `${pt(7)}px -apple-system, sans-serif`; ctx.textBaseline = "middle"; ctx.textAlign = "right";
   for (const e of [ylo, (ylo + yhi) / 2, yhi]) ctx.fillText(`${Math.round(e / 100) * 100}`, ex - 4, EY(e));
   ctx.textAlign = "center"; ctx.textBaseline = "top";
@@ -565,7 +714,7 @@ async function startRender() {
   box.hidden = false; box.className = "progress";
   $("renderBtn").disabled = true;
   try {
-    state.job = await api("/api/render", { file: state.file, options: readOptions() });
+    state.job = await api("/api/render", { file: state.file, options: { ...readOptions(), style: readStyle() } });
     pollJob();
   } catch (e) {
     box.className = "progress error"; $("progressMsg").textContent = e.message;
@@ -590,9 +739,15 @@ async function pollJob() {
 
 // ---- wiring ------------------------------------------------------------
 form.addEventListener("input", (e) => {
+  const name = e.target.name;
+  if (name === "preset" && COLOR_PRESETS[e.target.value]) {
+    const [c1, c2, c3] = COLOR_PRESETS[e.target.value][1];
+    form.elements.c_desc.value = c1; form.elements.c_flat.value = c2; form.elements.c_climb.value = c3;
+  } else if (/^c_/.test(name)) syncPresetFromColors();
   syncOptionLabels(); saveOptions();
+  if (isStyleField(name)) { draw(); return; }  // style: local redraw only
   // title only changes text; everything else changes page split / bounds
-  scheduleAnalyze(e.target.name === "race_title" ? 300 : 120);
+  scheduleAnalyze(name === "race_title" ? 300 : 120);
 });
 $("renderBtn").onclick = startRender;
 $("prevPage").onclick = () => setPage(state.page - 1);
@@ -605,18 +760,81 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "ArrowRight") setPage(state.page + 1);
 });
 
-canvas.addEventListener("mousemove", (e) => {
-  if (state.view !== "overview" || !state.data) return;
-  const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-  const hits = overviewRects.filter((q) => x >= q.x0 && x <= q.x1 && y >= q.y0 && y <= q.y1);
-  hits.sort((a, b) => (a.x1 - a.x0) * (a.y1 - a.y0) - (b.x1 - b.x0) * (b.y1 - b.y0));
-  const hp = hits.length ? hits[0].i : -1;
-  canvas.style.cursor = hp >= 0 ? "pointer" : "default";
-  if (hp !== state.hoverPage) { state.hoverPage = hp; draw(); }
+// ---- canvas interaction: overview page boxes, draggable page labels ------
+// Pointer events so the same code works with mouse, pen and touch (iPad).
+const canvasXY = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+function labelAt(x, y) {
+  const hits = state.hits || [];
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const h = hits[i];
+    if (x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1) return h;
+  }
+  return null;
+}
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!state.data) return;
+  const [x, y] = canvasXY(e);
+  if (state.view === "overview") {
+    const hits = overviewRects.filter((q) => x >= q.x0 && x <= q.x1 && y >= q.y0 && y <= q.y1);
+    hits.sort((a, b) => (a.x1 - a.x0) * (a.y1 - a.y0) - (b.x1 - b.x0) * (b.y1 - b.y0));
+    const hp = hits.length ? hits[0].i : -1;
+    canvas.style.cursor = hp >= 0 ? "pointer" : "default";
+    if (hp !== state.hoverPage) { state.hoverPage = hp; draw(); }
+  } else if (state.view === "page") {
+    const dr = state.drag;
+    if (dr) {
+      // new text top-left -> offset in points from the labelled point
+      fileOffsets()[dr.key] = [+((x - dr.gx - dr.ax) / dr.ptpx).toFixed(1), +((y - dr.gy - dr.ay) / dr.ptpx).toFixed(1)];
+      draw();
+      return;
+    }
+    const h = labelAt(x, y);
+    canvas.style.cursor = h ? "grab" : "default";
+    if ((h?.key || null) !== (state.hoverLabel || null)) { state.hoverLabel = h?.key || null; draw(); }
+  }
 });
+
+canvas.addEventListener("pointerdown", (e) => {
+  if (state.view !== "page" || !state.data) return;
+  const [x, y] = canvasXY(e);
+  const h = labelAt(x, y);
+  if (!h) return;
+  state.drag = { key: h.key, gx: x - h.tx, gy: y - h.ty, ax: h.ax, ay: h.ay, ptpx: h.ptpx };
+  canvas.setPointerCapture(e.pointerId);
+  canvas.classList.add("dragging");
+  e.preventDefault();
+  draw();
+});
+
+function endDrag() {
+  if (!state.drag) return;
+  state.drag = null;
+  canvas.classList.remove("dragging");
+  saveLabels();
+  draw();
+}
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
+canvas.addEventListener("pointerleave", () => { if (state.hoverLabel && !state.drag) { state.hoverLabel = null; draw(); } });
+
+canvas.addEventListener("dblclick", (e) => {
+  if (state.view !== "page") return;
+  const h = labelAt(...canvasXY(e));
+  if (h && fileOffsets()[h.key]) { delete fileOffsets()[h.key]; saveLabels(); draw(); }
+});
+
 canvas.addEventListener("click", () => {
   if (state.view === "overview" && state.hoverPage >= 0) { setPage(state.hoverPage); setView("page"); }
 });
+
+$("resetPageLabels").onclick = () => {
+  if (!state.data) return;
+  const pnum = state.data.pages[state.page].page, offs = fileOffsets();
+  for (const k of Object.keys(offs)) if (k.startsWith(`map:${pnum}:`) || k.startsWith(`prof:${pnum}:`)) delete offs[k];
+  saveLabels(); draw();
+};
+$("resetAllLabels").onclick = () => { if (state.file) { labelStore[state.file] = {}; saveLabels(); draw(); } };
 
 const drop = $("drop");
 $("upload").onchange = (e) => uploadFiles(e.target.files);
@@ -627,7 +845,14 @@ drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove
 (async function init() {
   state.providers = await api("/api/providers");
   form.elements.provider.innerHTML = state.providers.map((p) => `<option value="${p.id}">${p.id}${p.needs_key ? " (API key)" : ""}</option>`).join("");
+  form.elements.provider.value = state.providers.find((p) => p.default)?.id || state.providers[0].id;
+  const fonts = await api("/api/fonts");
+  form.elements.label_font.innerHTML = fonts.map((f) =>
+    `<option value="${f === "DejaVu Sans" ? "" : f}">${f === "DejaVu Sans" ? "DejaVu Sans (default)" : f}</option>`).join("");
+  form.elements.preset.innerHTML = Object.entries(COLOR_PRESETS).map(([k, [name]]) => `<option value="${k}">${name}</option>`).join("")
+    + `<option value="custom">Custom</option>`;
   restoreOptions();
+  syncPresetFromColors();
   syncOptionLabels();
   setView("overview");
   await Promise.all([loadFiles(), loadOutputs()]);
