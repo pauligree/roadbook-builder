@@ -222,3 +222,4 @@ input[type=range]:disabled{opacity:.4}
 .batch-list .folder { font-weight: 600; color: var(--muted); }
 #progressMsg { white-space: pre-line; }
 .batch-list span { overflow-wrap: anywhere; }
+.split-list label.off span:not(.km) { color: var(--muted); text-decoration: line-through; }

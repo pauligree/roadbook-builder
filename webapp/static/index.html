@@ -152,6 +152,17 @@
           <input name="waypoint_radius_m" type="range" min="10" max="300" step="10" value="60">
         </label>
 
+        <div id="poiField" class="field" hidden>
+          <span class="label-row">Waypoints</span>
+          <small class="note">Untick to leave a point out: not on the map, the profile or the
+            tables, and legs are measured across it. Saved per track.</small>
+          <div id="poiList" class="split-list"></div>
+          <div class="btn-row">
+            <button type="button" id="poiShowAll" class="ghost">Show all</button>
+          </div>
+          <small id="poiNote" class="note"></small>
+        </div>
+
         <!-- style: applied to the preview instantly and sent with the render -->
         <div class="pane-title sub">Style</div>
         <label class="field">

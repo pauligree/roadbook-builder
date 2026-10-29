@@ -39,6 +39,7 @@ function readOptions(file = state.file) {
   o.final_table = form.elements.final_table.checked;
   // custom split, once this file has one (until then the equal split
   // is analyzed and seeds it, see renderSplitList)
+  if (hiddenStore[file]?.length) o.hidden_pois = hiddenStore[file];
   if (o.split_mode === "waypoints" && splitStore[file]) {
     o.splits = fileSplits(file);
     if (!o.splits.length) o.pages = 1;  // no page ends chosen = one page
@@ -58,6 +59,39 @@ function setFileSplits(kms) {
   try { localStorage.setItem(SPLITS_KEY, JSON.stringify(splitStore)); } catch (_) {}
 }
 const splitMode = () => form.elements.split_mode.value;
+
+// ---- hidden waypoints, per GPX file -------------------------------------
+// {file: [km, ...]} — the server drops the waypoint nearest each km
+// (parse_gpx.hide_pois), so they vanish from map, profile and tables.
+const HIDDEN_KEY = "roadbook.hiddenPois";
+let hiddenStore = {};
+try { hiddenStore = JSON.parse(localStorage.getItem(HIDDEN_KEY) || "{}"); } catch (_) {}
+function setHidden(kms) {
+  if (kms.length) hiddenStore[state.file] = [...new Set(kms.map((k) => +k.toFixed(3)))].sort((a, b) => a - b);
+  else delete hiddenStore[state.file];
+  try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(hiddenStore)); } catch (_) {}
+}
+
+function renderPoiList() {
+  const d = state.data;
+  $("poiField").hidden = !d;
+  if (!d) return;
+  const all = [...d.pois.map((p) => ({ ...p, on: true })), ...d.hidden_pois.map((p) => ({ ...p, on: false }))]
+    .sort((a, b) => a.km - b.km);
+  $("poiList").innerHTML = all.length ? all.map((p) =>
+    `<label${p.on ? "" : ' class="off"'}><input type="checkbox" data-km="${p.km}"${p.on ? " checked" : ""}>` +
+    `<span class="km">${p.km.toFixed(1)} km</span><span>${escapeHtml(p.name)}</span></label>`).join("")
+    : `<small class="note">No waypoints on this track.</small>`;
+  const n = d.hidden_pois.length;
+  $("poiNote").textContent = n ? `${n} hidden on this track` : "";
+  $("poiShowAll").disabled = !n;
+}
+
+$("poiList").addEventListener("change", () => {
+  setHidden([...$("poiList").querySelectorAll("input:not(:checked)")].map((c) => +c.dataset.km));
+  scheduleAnalyze(60);
+});
+$("poiShowAll").onclick = () => { setHidden([]); scheduleAnalyze(0); };
 
 // Waypoints a page may end at: all but the very start/finish of the track.
 const splitCandidates = (d) => d.pois.filter((p) => p.km > 0.5 && p.km < d.stats.total_km - 0.5);
@@ -310,6 +344,7 @@ async function runAnalyze() {
     updateLabelCount();
     updateNotes();
     renderSplitList();
+    renderPoiList();
     renderStrip();
     renderSummary();
     draw();
@@ -377,15 +412,16 @@ async function loadFiles() {
     b.title = f.name;
     b.onclick = () => selectFile(f.path);
     list.appendChild(fileRow(b, `/api/files?path=${encodeURIComponent(f.path)}`, async () => {
-      delete labelStore[f.path]; delete splitStore[f.path];
+      delete labelStore[f.path]; delete splitStore[f.path]; delete hiddenStore[f.path];
       try {
         localStorage.setItem(LABELS_KEY, JSON.stringify(labelStore));
         localStorage.setItem(SPLITS_KEY, JSON.stringify(splitStore));
+        localStorage.setItem(HIDDEN_KEY, JSON.stringify(hiddenStore));
       } catch (_) {}
       if (state.file === f.path) {
         state.file = null; state.data = null;
         $("renderBtn").disabled = true; $("summary").textContent = ""; $("strip").innerHTML = "";
-        $("pagesNote").textContent = ""; $("zoomNote").textContent = ""; $("splitField").hidden = true;
+        $("pagesNote").textContent = ""; $("zoomNote").textContent = ""; $("splitField").hidden = true; $("poiField").hidden = true;
         $("empty").textContent = "Select a GPX track on the left."; $("empty").hidden = false;
         if (state.view === "final") showFinal(); else draw();
       }

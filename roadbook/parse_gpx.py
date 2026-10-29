@@ -69,6 +69,25 @@ def guess_title_from_filename(gpx_path: Path):
     )
 
 
+def hide_pois(data, hidden_kms, near_km=0.3):
+    """`data` without the waypoints the user switched off, plus the removed
+    ones. Each km in `hidden_kms` removes the waypoint nearest to it (if
+    within near_km) — kms rather than names, since a loop course can pass
+    the same named point twice, and the match survives the small km shifts
+    a different waypoint radius causes. Everything downstream (map, profile,
+    waypoint tables and their per-leg km / D+ / D-) then just never sees
+    them."""
+    pois = list(data["pois"])
+    hidden = []
+    for km in sorted(hidden_kms or []):
+        if not pois:
+            break
+        i = min(range(len(pois)), key=lambda j: abs(pois[j][0] - km))
+        if abs(pois[i][0] - km) <= near_km:
+            hidden.append(pois.pop(i))
+    return (dict(data, pois=pois) if hidden else data), sorted(hidden)
+
+
 def parse_gpx(gpx_path: Path, waypoint_radius_m: float = 60.0):
     with open(gpx_path, encoding="utf-8") as f:
         gpx = gpxpy.parse(f)

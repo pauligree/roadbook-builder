@@ -83,6 +83,7 @@ class RenderOptions:
     api_key: str | None = None
     style_id: str | None = None
     splits: list | None = None  # km where pages end; None = equal-distance split
+    hidden_pois: list | None = None  # km of waypoints left out, see parse_gpx.hide_pois
     part_tables: bool = True  # waypoint-table page after each map page
     final_table: bool = True  # final waypoint table of all points
     waypoint_radius_m: float = 60.0
@@ -112,6 +113,8 @@ class RenderOptions:
         opts.style = clean_style(opts.style)
         if opts.splits:
             opts.splits = sorted({round(float(k), 3) for k in opts.splits})[:50] or None
+        if opts.hidden_pois:
+            opts.hidden_pois = sorted({round(float(k), 3) for k in opts.hidden_pois})[:500] or None
         opts.provider = opts.provider or fetch_basemap.default_provider()
         if opts.provider not in fetch_basemap.PROVIDERS:
             raise ValueError(f"Unknown provider {opts.provider!r}")
@@ -129,6 +132,7 @@ class RenderOptions:
             part_tables=d["part_tables"], final_table=d["final_table"],
             overlap_km=d["overlap_km"], same_scale=d["same_scale"], print_scale=d["print_scale"],
             saturation=d["saturation"], lighten=d["lighten"], hillshade=d["hillshade"],
+            hidden_pois=d["hidden_pois"],
         )
 
 
@@ -163,7 +167,7 @@ def ground_scale(box):
 
 def analyze(gpx_path, opts: RenderOptions):
     gpx_path = Path(gpx_path)
-    data = _parsed(gpx_path, opts.waypoint_radius_m)
+    data, hidden = parse_gpx.hide_pois(_parsed(gpx_path, opts.waypoint_radius_m), opts.hidden_pois)
     n_pages = run_pipeline.effective_pages(gpx_path, opts.as_args(), data["total_dist_km"])
     provider = fetch_basemap.PROVIDERS[opts.provider]
 
@@ -238,6 +242,7 @@ def analyze(gpx_path, opts: RenderOptions):
             grade=np.round(grade_ds, 2).tolist(),
         ),
         pois=pois,
+        hidden_pois=[dict(km=km, name=clean_name(name)) for (km, name, _lat, _lon, _ele) in hidden],
         pages=pages,
         sheets=sheets,
         tiles_total=sum(p["bounds"]["tiles"] for p in pages),

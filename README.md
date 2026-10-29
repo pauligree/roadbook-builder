@@ -330,6 +330,17 @@ Table pages carry no basemap. Web app: two checkboxes under Options; in
 *Page layout*, ‹ › step through every page in print order and the
 *All points* chip jumps to the final table.
 
+### Hiding waypoints (`--hide-waypoints`)
+
+To leave a GPX waypoint out of the roadbook, pass its km:
+`--hide-waypoints 4.3,15.5` drops the waypoint nearest to each value. A
+hidden point is not drawn on the map or the profile, has no table row, and
+the legs around it are measured straight across it (km / D+ / D- from the
+previous point then run to the point before it). It's matched by km, not
+name, so on a loop course you can hide one passage of a point and keep the
+other. Web app: untick it in the *Waypoints* list under Options (saved per
+track, like custom splits and moved labels); *Show all* brings them back.
+
 ### Style file (`--style`)
 
 Label font, line widths, colour scale and hand-placed label positions can

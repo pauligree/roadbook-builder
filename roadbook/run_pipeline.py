@@ -86,12 +86,13 @@ def process_one(gpx_path: Path, args, out_override: Path = None, progress=None) 
     print(f"=== [1/4] Parsing {gpx_path.name} ===")
     progress(1, f"Parsing {gpx_path.name}")
     data = parse_gpx.parse_gpx(gpx_path, waypoint_radius_m=args.waypoint_radius_m)
+    data, hidden = parse_gpx.hide_pois(data, getattr(args, "hidden_pois", None))
     data_pkl = WORK_DIR / f"{slug}_data.pkl"
     with open(data_pkl, "wb") as f:
         pickle.dump(data, f)
     print(f"  {data['race_title']} — sector {data['sector_code']}: {data['start_name']} -> {data['end_name']}")
     print(f"  {data['total_dist_km']:.2f} km | D+ {data['gain']:.0f} m | D- {data['loss']:.0f} m | "
-          f"{len(data['pois'])} waypoints matched")
+          f"{len(data['pois'])} waypoints matched" + (f", {len(hidden)} hidden" if hidden else ""))
 
     splits = getattr(args, "splits", None)
     n_pages = effective_pages(gpx_path, args, data["total_dist_km"])
@@ -189,6 +190,10 @@ def main():
     ap.add_argument("--mapbox-style", default=None, help="Mapbox style ID (default: mapbox/outdoors-v12)")
     ap.add_argument("--maptiler-map-id", default=None, help="MapTiler map ID (default: topo-v4)")
     ap.add_argument("--waypoint-radius-m", type=float, default=60.0)
+    ap.add_argument("--hide-waypoints", dest="hidden_pois", type=fetch_basemap.parse_splits, default=None,
+                     metavar="KM,KM",
+                     help="Leave out the waypoints nearest to these km (e.g. 4.3,15.5): not drawn, "
+                          "not in the tables, and legs are measured across them")
     ap.add_argument("--tile-workers", type=int, default=4)
     ap.add_argument("--overlap-km", type=float, default=fetch_basemap.OVERLAP_KM,
                      help="Track shown (faded) beyond each page's ends, in km (0 = none)")
