@@ -9,7 +9,10 @@
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PORT=8000
 URL="http://127.0.0.1:$PORT"
-LOG="$PROJECT_DIR/work/server.log"
+# work dir from ROADBOOK_WORK_DIR / config.local.json, see roadbook/config.py
+WORK_DIR="$(cd "$PROJECT_DIR" && .venv/bin/python -c 'from roadbook.config import WORK_DIR; print(WORK_DIR)' 2>/dev/null)"
+WORK_DIR="${WORK_DIR:-$PROJECT_DIR/work}"
+LOG="$WORK_DIR/server.log"
 
 running() { curl -s -o /dev/null --max-time 1 "$URL/api/providers"; }
 
@@ -20,7 +23,7 @@ if [ "$1" = "--stop" ]; then
 fi
 
 if ! running; then
-    mkdir -p "$PROJECT_DIR/work"
+    mkdir -p "$WORK_DIR"
     cd "$PROJECT_DIR" || exit 1
     nohup "$PROJECT_DIR/.venv/bin/python" -m webapp.server >"$LOG" 2>&1 &
     for _ in $(seq 1 40); do

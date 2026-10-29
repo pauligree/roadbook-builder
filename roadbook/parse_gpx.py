@@ -23,8 +23,7 @@ from pathlib import Path
 import gpxpy
 import numpy as np
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-WORK_DIR = PROJECT_ROOT / "work"
+from roadbook.config import WORK_DIR
 
 EARTH_RADIUS_M = 6371000.0
 

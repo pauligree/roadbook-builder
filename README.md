@@ -410,7 +410,8 @@ roadbook-builder/
 ├── README.md                 (this file)
 ├── requirements.txt
 ├── input/                    put source .gpx files here
-├── work/                     intermediates (parsed cache, tiles, un-merged PDFs) — safe to delete, regenerable
+├── work/                     intermediates (parsed cache, tiles, un-merged PDFs) — safe to delete, regenerable;
+│                             move it with ROADBOOK_WORK_DIR or "work_dir" in config.local.json
 ├── output/                   final roadbook PDFs
 ├── presets/                  web app race presets (<name>.json), created on first save
 └── roadbook/

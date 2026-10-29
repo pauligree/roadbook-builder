@@ -25,10 +25,10 @@ render service in Phase 2 option A.
 
 ## Phase 0 — prep
 
-- [ ] `git init` (project has no version control yet)
+- [x] `git init` (project has no version control yet)
 - [x] Library API `roadbook/api.py`: `RenderOptions`, `analyze()` (JSON, no
       tiles), `render()` with progress callback. CLI keeps working.
-- [ ] Configurable cache dir instead of hardcoded `work/`
+- [x] Configurable cache dir instead of hardcoded `work/` — `roadbook/config.py`: `ROADBOOK_WORK_DIR` or `"work_dir"` in config.local.json
 - [ ] Persistent tile cache keyed `provider/z/x/y`
 
 ## Phase 1a — web mockup

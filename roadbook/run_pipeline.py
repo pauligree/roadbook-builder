@@ -49,9 +49,8 @@ import sys
 from pathlib import Path
 
 from roadbook import fetch_basemap, merge_layers, parse_gpx
+from roadbook.config import PROJECT_ROOT, WORK_DIR
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-WORK_DIR = PROJECT_ROOT / "work"
 OUTPUT_DIR = PROJECT_ROOT / "output"
 
 # GPX filenames containing any of these (case-insensitive) are treated as a

@@ -77,6 +77,7 @@ Local defaults: config.local.json in the project root (gitignored) can hold a
 per-provider key and default style, used when neither --api-key nor the env
 var is set:
     {"maptiler": {"api_key": "xxxx", "style_id": "<map id>"}}
+(loaded by roadbook/config.py, which also reads its optional "work_dir").
 """
 import argparse
 import io
@@ -93,9 +94,8 @@ import requests
 from PIL import Image
 
 from roadbook import layout
+from roadbook.config import LOCAL_CONFIG, WORK_DIR
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-WORK_DIR = PROJECT_ROOT / "work"
 
 USER_AGENT = "roadbook-builder/1.0 (personal trail-race roadbook generator)"
 
@@ -127,17 +127,6 @@ PROVIDERS = {
     ),
 }
 
-LOCAL_CONFIG_PATH = PROJECT_ROOT / "config.local.json"
-
-
-def _load_local_config():
-    try:
-        return json.loads(LOCAL_CONFIG_PATH.read_text())
-    except (OSError, ValueError):
-        return {}
-
-
-LOCAL_CONFIG = _load_local_config()
 for _name, _local in LOCAL_CONFIG.items():
     if _name in PROVIDERS and _local.get("style_id"):
         PROVIDERS[_name]["default_style"] = _local["style_id"]

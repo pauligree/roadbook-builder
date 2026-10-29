@@ -51,8 +51,7 @@ from PIL import Image
 from roadbook.layout import (GRID, HEIGHT_RATIOS, PAGE_SIZE_IN, TABLE_FONT_PT, TABLE_HEAD_IN,
                              TABLE_ROW_IN, table_rows_per_page)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-WORK_DIR = PROJECT_ROOT / "work"
+from roadbook.config import WORK_DIR
 
 # ---- styling knobs -----------------------------------------------------
 GRADIENT_SMOOTH_WINDOW = 11          # points, rolling average before computing % grade
