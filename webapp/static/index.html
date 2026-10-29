@@ -178,6 +178,14 @@
           <span>Profile line width <output id="profileOut">0.9</output> pt</span>
           <input name="profile_width" type="range" min="0.3" max="3" step="0.1" value="0.9" data-style>
         </label>
+        <label class="field">
+          <span>Profile smoothing <output id="smoothOut">off</output></span>
+          <input name="profile_smooth_m" type="range" min="0" max="300" step="25" value="0" data-style>
+        </label>
+        <label class="field check">
+          <input name="profile_cum_gain" type="checkbox" data-style>
+          <span>Cumulative D+ on the profile</span>
+        </label>
 
         <label class="field">
           <span>Colour scale</span>

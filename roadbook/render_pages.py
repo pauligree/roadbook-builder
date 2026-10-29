@@ -92,6 +92,8 @@ DEFAULT_STYLE = dict(
     grade_colors=None,   # [descent, flat, climb] colours; None = GRADIENT_COLORS
     grade_max=None,      # % grade drawn at full colour; None = auto (97th percentile, clipped)
     grade_bins=None,     # e.g. [5, 10, 20]: colour classes ±5/10/20 % instead of a smooth scale
+    profile_smooth_m=0,  # moving-average window (m) for the drawn profile line; 0 = raw GPS elevations
+    profile_cum_gain=False,  # dashed cumulative D+ (from the start) on a right-hand profile axis
     label_offsets={},    # {label key: [dx, dy]} — dragged labels, see label_key()
 )
 
@@ -163,6 +165,23 @@ def binned_scale(cmap, bins):
     n = len(bounds) - 1
     colors = [cmap(i / (n - 1)) for i in range(n)]
     return ListedColormap(colors), BoundaryNorm(bounds, n)
+
+
+def smooth_elevation(dist_m, eles, window_m):
+    """Moving average of `eles` over +-window_m/2 of track distance — evens
+    out GPS/DEM jitter in the drawn profile. Stats and tables keep the raw
+    values."""
+    if not window_m or window_m <= 0:
+        return eles
+    cs = np.r_[0.0, np.cumsum(eles)]
+    lo = np.searchsorted(dist_m, dist_m - window_m / 2, side="left")
+    hi = np.searchsorted(dist_m, dist_m + window_m / 2, side="right")
+    return (cs[hi] - cs[lo]) / (hi - lo)
+
+
+def cumulative_gain(eles):
+    """D+ from the start at every track point (same raw sums as the stats)."""
+    return np.r_[0.0, np.cumsum(np.clip(np.diff(eles), 0, None))]
 
 
 def compute_gradient(eles, dist):
@@ -513,15 +532,19 @@ def build_page(mode, page, ctx):
     # ---- ELEVATION PROFILE ----
     ax_e = fig.add_subplot(gs[2])
     pos = ax_e.get_position()
-    ax_e.set_position([pos.x0 + 0.045, pos.y0, pos.width - 0.055, pos.height])
+    cum_gain = style["profile_cum_gain"]
+    # a right-hand D+ axis needs room for its tick labels
+    ax_e.set_position([pos.x0 + 0.045, pos.y0, pos.width - (0.095 if cum_gain else 0.055), pos.height])
     ax_e.patch.set_alpha(0.0)
     if not is_vector:
         ax_e.axis("off")
     else:
         ax_e.set_facecolor("none")
-        ax_e.plot(seg_dist, seg_ele, color="#1a1a1a", linewidth=style["profile_width"] + 0.6, solid_capstyle="round",
+        prof_ele = ctx["profile_ele"][idx]  # smoothed when profile_smooth_m is set
+        on_line = lambda km, ele: float(np.interp(km, dist_km, ctx["profile_ele"])) if style["profile_smooth_m"] else ele
+        ax_e.plot(seg_dist, prof_ele, color="#1a1a1a", linewidth=style["profile_width"] + 0.6, solid_capstyle="round",
                   solid_joinstyle="round", zorder=2)
-        epts = np.array([seg_dist, seg_ele]).T.reshape(-1, 1, 2)
+        epts = np.array([seg_dist, prof_ele]).T.reshape(-1, 1, 2)
         esegs = np.concatenate([epts[:-1], epts[1:]], axis=1)
         elc = LineCollection(esegs, cmap=cmap, norm=norm, linewidth=style["profile_width"], zorder=3,
                               capstyle="round", joinstyle="round")
@@ -540,17 +563,31 @@ def build_page(mode, page, ctx):
             pos = (dict(xytext=(off[0], -off[1]), ha="left", va="top",
                         arrowprops=dict(arrowstyle="-", color="#888888", linewidth=0.4, shrinkA=0, shrinkB=0))
                    if off else dict(xytext=(0, 5), ha="center", va="bottom"))
-            ax_e.annotate(wrapped, xy=(km, pele), textcoords="offset points", **pos, **font_kw,
+            ax_e.annotate(wrapped, xy=(km, on_line(km, pele)), textcoords="offset points", **pos, **font_kw,
                           rotation=0, fontsize=6.5, color="#1a1a2e",
                           linespacing=1.15, zorder=5,
                           bbox=LABEL_BG)
-            ax_e.scatter([km], [pele], s=8, facecolor="#2c3e50", edgecolor="white", linewidth=0.4, zorder=6)
+            ax_e.scatter([km], [on_line(km, pele)], s=8, facecolor="#2c3e50", edgecolor="white", linewidth=0.4, zorder=6)
 
-        ax_e.scatter([seg_dist[0]], [seg_ele[0]], marker="o", s=40, facecolor="#1b8a3a", edgecolor="white", linewidth=1.0, zorder=7)
-        ax_e.scatter([seg_dist[-1]], [seg_ele[-1]], marker="s", s=40, facecolor="#c0392b", edgecolor="white", linewidth=1.0, zorder=7)
+        ax_e.scatter([seg_dist[0]], [prof_ele[0]], marker="o", s=40, facecolor="#1b8a3a", edgecolor="white", linewidth=1.0, zorder=7)
+        ax_e.scatter([seg_dist[-1]], [prof_ele[-1]], marker="s", s=40, facecolor="#c0392b", edgecolor="white", linewidth=1.0, zorder=7)
+
+        if cum_gain:
+            # behind the profile: the twin axes go one level down, and the
+            # profile axes' (transparent) patch lets it show through
+            ax_c = ax_e.twinx()
+            ax_c.set_zorder(ax_e.get_zorder() - 1)
+            seg_cum = ctx["cum_gain"][idx]
+            ax_c.plot(seg_dist, seg_cum, color="#666666", linewidth=0.8, linestyle=(0, (4, 2)))
+            lo, hi = float(seg_cum.min()), float(seg_cum.max())
+            ax_c.set_ylim(lo, hi + max(hi - lo, 50) * 0.35)  # headroom like the elevation axis
+            ax_c.set_ylabel("D+ from start (m)", fontsize=7, color="#666666")
+            ax_c.tick_params(labelsize=6.5, colors="#666666")
+            ax_c.spines["top"].set_visible(False)
+            ax_c.spines["right"].set_color("#999999")
 
         ax_e.set_xlim(d0, d1)
-        ax_e.set_ylim(min(seg_min - 100, 900), seg_max + 340)
+        ax_e.set_ylim(min(float(prof_ele.min()) - 100, 900), float(prof_ele.max()) + 340)
         ax_e.set_ylabel("elevation (m)", fontsize=7.5)
         ax_e.tick_params(labelsize=7)
         ax_e.grid(axis="x", color="#eeeeee", linewidth=0.4)
@@ -559,7 +596,8 @@ def build_page(mode, page, ctx):
         xticks = [t for t in ax_e.get_xticks() if d0 <= t <= d1]
         ax_e.set_xticks(xticks)
         ax_e.annotate("km", xy=(1.0, 0), xycoords=("axes fraction", "axes fraction"),
-                      xytext=(4, -3), textcoords="offset points", fontsize=7.5,
+                      xytext=(4, -11 if cum_gain else -3),  # below the D+ axis' "0"
+                      textcoords="offset points", fontsize=7.5,
                       color="#333333", ha="left", va="top")
 
     # ---- FOOTER ----
@@ -864,6 +902,8 @@ def main():
                             part_tables=not (args.no_tables or args.no_part_tables),
                             final_table=not (args.no_tables or args.no_final_table)),
         cmap=cmap, norm=norm, basemap_bounds=basemap_bounds, basemap_imgs=basemap_imgs,
+        profile_ele=smooth_elevation(data["dist"], data["eles"], style["profile_smooth_m"]),
+        cum_gain=cumulative_gain(data["eles"]),
         race_title=args.race_title or data.get("race_title", "Roadbook"),
         pois_all=pois_all, attribution=attribution, style=style,
     )

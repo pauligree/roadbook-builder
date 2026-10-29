@@ -147,6 +147,8 @@ function readStyle(file = state.file) {
     label_font: e.label_font.value || null,
     track_width: +e.track_width.value,
     profile_width: +e.profile_width.value,
+    profile_smooth_m: +e.profile_smooth_m.value,
+    profile_cum_gain: e.profile_cum_gain.checked,
     grade_colors: [e.c_desc.value, e.c_flat.value, e.c_climb.value],
     grade_max: +e.grade_max.value || null,
     grade_bins: e.grade_bins.value ? e.grade_bins.value.split(",").map(Number) : null,
@@ -168,7 +170,7 @@ function snapshotOptions() {
   const { api_key, ...rest } = Object.fromEntries(new FormData(form).entries());
   return { ...rest, pages: form.elements.pages.value,  // disabled in custom split: FormData skips it
     part_tables: form.elements.part_tables.checked, final_table: form.elements.final_table.checked,
-    same_scale: form.elements.same_scale.checked, _v: 2 };
+    same_scale: form.elements.same_scale.checked, profile_cum_gain: form.elements.profile_cum_gain.checked, _v: 2 };
 }
 
 function applyOptions(saved) {
@@ -297,6 +299,7 @@ function syncOptionLabels() {
   state.style = readStyle();
   $("trackOut").textContent = state.style.track_width.toFixed(1);
   $("profileOut").textContent = state.style.profile_width.toFixed(1);
+  $("smoothOut").textContent = state.style.profile_smooth_m ? `${state.style.profile_smooth_m} m` : "off";
   $("gradeOut").textContent = state.style.grade_max
     ? `±${state.style.grade_max} %`
     : `auto${state.data ? ` (±${state.data.grade_vmax.toFixed(0)} %)` : ""}`;
@@ -575,6 +578,29 @@ const COLORS = () => {
 
 const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 const gradeVmax = () => state.style.grade_max || state.data.grade_vmax;
+
+// Drawn profile elevations: the preview track smoothed like
+// render_pages.smooth_elevation (point-weighted mean over +-window/2).
+function profileEle() {
+  const t = state.data.track, w = state.style.profile_smooth_m;
+  if (!w) return t.ele;
+  const cs = [0]; t.ele.forEach((e, i) => cs.push(cs[i] + e));
+  const out = [];
+  let lo = 0, hi = 0;
+  for (let i = 0; i < t.km.length; i++) {
+    while (t.km[lo] < t.km[i] - w / 2000) lo++;
+    while (hi < t.km.length && t.km[hi] <= t.km[i] + w / 2000) hi++;
+    out.push((cs[hi] - cs[lo]) / (hi - lo));
+  }
+  return out;
+}
+const interpKm = (km, arr) => {
+  const k = state.data.track.km;
+  const i = k.findIndex((v) => v >= km);
+  if (i < 0) return arr[arr.length - 1];
+  if (i === 0) return arr[0];
+  return arr[i - 1] + (arr[i] - arr[i - 1]) * (km - k[i - 1]) / (k[i] - k[i - 1]);
+};
 
 // colour at t in 0..1 along the descent -> flat -> climb stops
 function scaleColor(t) {
@@ -1060,11 +1086,14 @@ function drawPage(W, H) {
   deferred.forEach((f) => f());
   deferred.length = 0;
 
-  // elevation profile (render_pages shifts it right by 0.045 and narrows by 0.055)
-  const er = rows[2];
-  const ex = FX(er.x0 + 0.045), ew = (er.x1 - er.x0 - 0.055) * PW * s;
+  // elevation profile (render_pages shifts it right by 0.045 and narrows by
+  // 0.055, or 0.095 to make room for the cumulative D+ axis)
+  const er = rows[2], cumGain = state.style.profile_cum_gain;
+  const ex = FX(er.x0 + 0.045), ew = (er.x1 - er.x0 - (cumGain ? 0.095 : 0.055)) * PW * s;
   const ey = FY(er.y1), eh = (er.y1 - er.y0) * PH * s;
-  const ylo = Math.min(pg.min_ele - 100, 900), yhi = pg.max_ele + 340;
+  const pele = profileEle(), segEle = idx.map((i) => pele[i]);
+  const ylo = Math.min(Math.min(...segEle) - 100, 900), yhi = Math.max(...segEle) + 340;
+  const onLine = (p) => state.style.profile_smooth_m ? interpKm(p.km, pele) : p.ele;
   const EX = (km) => ex + (km - pg.d0) / (pg.d1 - pg.d0) * ew, EY = (e) => ey + eh - (e - ylo) / (yhi - ylo) * eh;
   ctx.strokeStyle = "#333"; ctx.lineWidth = 0.8;
   ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex, ey + eh); ctx.lineTo(ex + ew, ey + eh); ctx.stroke();
@@ -1073,13 +1102,22 @@ function drawPage(W, H) {
     ctx.strokeStyle = "#ddd"; ctx.lineWidth = pt(0.4);
     ctx.beginPath(); ctx.moveTo(EX(p.km), ey); ctx.lineTo(EX(p.km), ey + eh); ctx.stroke();
   }
-  drawGradeLine((i) => [EX(t.km[i]), EY(t.ele[i])], idx, pt(state.style.profile_width), pt(state.style.profile_width + 0.6));
-  for (const p of pois) marker(EX(p.km), EY(p.ele), pt(2), "#2c3e50");
+  if (cumGain) {  // dashed D+ from start, behind the profile, own scale (as render_pages' twin axis)
+    const cum = idx.map((i) => t.cum_up[i]), clo = Math.min(...cum), chi = Math.max(...cum);
+    const CY = (v) => ey + eh - (v - clo) / (chi + Math.max(chi - clo, 50) * 0.35 - clo) * eh;
+    ctx.save(); ctx.setLineDash([pt(3.2), pt(1.6)]); ctx.strokeStyle = "#666"; ctx.lineWidth = pt(0.8);
+    ctx.beginPath(); idx.forEach((i, k) => k ? ctx.lineTo(EX(t.km[i]), CY(t.cum_up[i])) : ctx.moveTo(EX(t.km[i]), CY(t.cum_up[i])));
+    ctx.stroke(); ctx.restore();
+    ctx.fillStyle = "#666"; ctx.font = `${pt(6.5)}px -apple-system, sans-serif`; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText(`${Math.round(clo)}`, ex + ew + 4, CY(clo)); ctx.fillText(`${Math.round(chi)} m D+`, ex + ew + 4, CY(chi));
+  }
+  drawGradeLine((i) => [EX(t.km[i]), EY(pele[i])], idx, pt(state.style.profile_width), pt(state.style.profile_width + 0.6));
+  for (const p of pois) marker(EX(p.km), EY(onLine(p)), pt(2), "#2c3e50");
   ctx.restore();
   // profile labels: default centred just above the point (xytext=(0, 5), va="bottom")
   for (const p of pois) {
     const key = labelKey("prof", pnum, p.km), text = wrapProfileName(p.name), opts = { size: pt(6.5) };
-    const ax = EX(p.km), ay = EY(p.ele);
+    const ax = EX(p.km), ay = EY(onLine(p));
     const at = fromOffset(key, ax, ay);
     if (at) putLabel(key, text, ax, ay, at[0], at[1], opts, "#888");
     else {

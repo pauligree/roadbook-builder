@@ -355,6 +355,8 @@ also be set per render with a JSON file — this is what the web app's
   "grade_colors": ["#1a9850", "#e6c229", "#d73027"],
   "grade_max": 25,
   "grade_bins": [5, 10, 20],
+  "profile_smooth_m": 150,
+  "profile_cum_gain": true,
   "label_offsets": {"map:1:12.40": [-90, 20], "prof:1:12.40": [10, -30]}
 }
 ```
@@ -377,6 +379,12 @@ ignored). Distinct steps read far better on paper, and with the black &
 white colour preset they become clearly separate greys. The colour bar on
 each map turns into the matching legend, with the class edges labelled.
 Web app: *Colour steps* under Style.
+
+`profile_smooth_m` draws the elevation profile as a moving average over
+that many metres of track, ironing out GPS/DEM jitter (stats and tables
+keep the raw values). `profile_cum_gain` adds a dashed line of D+ from the
+start on a right-hand axis of the profile. Web app: *Profile smoothing* and
+*Cumulative D+ on the profile* under Style.
 
 ## 5. Using the output
 

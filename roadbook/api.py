@@ -26,7 +26,7 @@ import numpy as np
 from roadbook import fetch_basemap, layout, parse_gpx, run_pipeline
 from roadbook.render_pages import (
     GRADIENT_COLORS, GRADIENT_VMAX_CLIP, HEIGHT_RATIOS, PAGE_SIZE_IN,
-    build_sheets, clean_name, compute_gradient, page_subtitle, table_header,
+    build_sheets, clean_name, compute_gradient, cumulative_gain, page_subtitle, table_header,
 )
 
 PREVIEW_MAX_POINTS = 3000
@@ -64,6 +64,10 @@ def clean_style(s):
         out["grade_colors"] = colors
     if s.get("grade_max"):
         out["grade_max"] = min(60.0, max(2.0, float(s["grade_max"])))
+    if s.get("profile_smooth_m"):
+        out["profile_smooth_m"] = min(1000.0, max(0.0, float(s["profile_smooth_m"])))
+    if s.get("profile_cum_gain"):
+        out["profile_cum_gain"] = True
     bins = s.get("grade_bins")
     if isinstance(bins, list) and 1 <= len(bins) <= 6:
         bins = sorted({round(min(60.0, max(1.0, float(b))), 1) for b in bins})
@@ -244,6 +248,7 @@ def analyze(gpx_path, opts: RenderOptions):
             lat=np.round(lats[idx], 6).tolist(), lon=np.round(lons[idx], 6).tolist(),
             ele=np.round(eles[idx], 1).tolist(), km=np.round(dist_km[idx], 4).tolist(),
             grade=np.round(grade_ds, 2).tolist(),
+            cum_up=np.round(cumulative_gain(eles)[idx], 1).tolist(),  # full-resolution D+ sums
         ),
         pois=pois,
         hidden_pois=[dict(km=km, name=clean_name(name)) for (km, name, _lat, _lon, _ele) in hidden],
