@@ -40,6 +40,7 @@ function readOptions(file = state.file) {
   // custom split, once this file has one (until then the equal split
   // is analyzed and seeds it, see renderSplitList)
   if (hiddenStore[file]?.length) o.hidden_pois = hiddenStore[file];
+  o.race_title = titleStore[file] || "";  // per track, not the form's (shared) value
   if (o.split_mode === "waypoints" && splitStore[file]) {
     o.splits = fileSplits(file);
     if (!o.splits.length) o.pages = 1;  // no page ends chosen = one page
@@ -70,6 +71,23 @@ function setHidden(kms) {
   if (kms.length) hiddenStore[state.file] = [...new Set(kms.map((k) => +k.toFixed(3)))].sort((a, b) => a - b);
   else delete hiddenStore[state.file];
   try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(hiddenStore)); } catch (_) {}
+}
+
+// ---- race title, per GPX file -------------------------------------------
+// {file: title}. A form-wide title stuck to every track selected later
+// (one track's title ended up on another's PDF), so it lives here.
+const TITLE_KEY = "roadbook.raceTitle";
+let titleStore = {};
+try { titleStore = JSON.parse(localStorage.getItem(TITLE_KEY) || "{}"); } catch (_) {}
+function setTitle(file, title) {
+  if (!file) return;
+  if (title) titleStore[file] = title; else delete titleStore[file];
+  try { localStorage.setItem(TITLE_KEY, JSON.stringify(titleStore)); } catch (_) {}
+}
+function syncTitleField() {
+  const el = form.elements.race_title;
+  el.value = titleStore[state.file] || "";
+  el.placeholder = state.data && !el.value ? `auto: ${state.data.meta.race_title}` : "auto from filename";
 }
 
 function renderPoiList() {
@@ -167,7 +185,8 @@ const COLOR_PRESETS = {
 // The whole form as stored (localStorage and race presets): every field
 // but the API key, which stays on the server.
 function snapshotOptions() {
-  const { api_key, ...rest } = Object.fromEntries(new FormData(form).entries());
+  // race_title is per track (titleStore), not part of a reusable option set
+  const { api_key, race_title, ...rest } = Object.fromEntries(new FormData(form).entries());
   return { ...rest, pages: form.elements.pages.value,  // disabled in custom split: FormData skips it
     part_tables: form.elements.part_tables.checked, final_table: form.elements.final_table.checked,
     same_scale: form.elements.same_scale.checked, profile_cum_gain: form.elements.profile_cum_gain.checked, _v: 2 };
@@ -177,7 +196,7 @@ function applyOptions(saved) {
   if (!saved._v) delete saved.provider;  // saved before the server-chosen default existed
   for (const [k, v] of Object.entries(saved)) {
     const el = form.elements[k];
-    if (!el || k === "api_key") continue;
+    if (!el || k === "api_key" || k === "race_title") continue;
     if (el.type === "checkbox") el.checked = !!v; else el.value = v;
   }
 }
@@ -357,6 +376,7 @@ async function runAnalyze() {
     renderPoiList();
     renderStrip();
     renderSummary();
+    syncTitleField();
     draw();
   } catch (e) {
     if (seq === analyzeSeq) showError(e.message);
@@ -423,6 +443,7 @@ async function loadFiles() {
     b.onclick = () => selectFile(f.path);
     list.appendChild(fileRow(b, `/api/files?path=${encodeURIComponent(f.path)}`, async () => {
       delete labelStore[f.path]; delete splitStore[f.path]; delete hiddenStore[f.path];
+      setTitle(f.path, "");
       try {
         localStorage.setItem(LABELS_KEY, JSON.stringify(labelStore));
         localStorage.setItem(SPLITS_KEY, JSON.stringify(splitStore));
@@ -442,6 +463,7 @@ async function loadFiles() {
 
 function selectFile(path) {
   state.file = path; state.page = 0; state.data = null;
+  syncTitleField();
   for (const b of document.querySelectorAll(".file")) b.classList.toggle("active", b.title === path.split("/").pop());
   $("empty").hidden = true;
   if (state.view === "final") showFinal();
@@ -1308,7 +1330,7 @@ function updateBatch(busy = !!state.job) {
   const n = batchFiles().length, merge = $("batchMerge").checked && n > 1;
   $("batchBtn").disabled = busy || !n;
   $("batchBtn").textContent = n ? `Render ${n} track${n > 1 ? "s" : ""}${merge ? " + merge" : ""}` : "Render tracks";
-  $("batchNote").textContent = merge ? `Merged PDF → output/${mergedName(form.elements.race_title.value.trim())}` : "";
+  $("batchNote").textContent = merge ? `Merged PDF → output/${mergedName(titleStore[batchFiles()[0]?.path] || "")}` : "";
 }
 
 async function startBatch() {
@@ -1337,6 +1359,7 @@ form.addEventListener("input", (e) => {
     const [c1, c2, c3] = COLOR_PRESETS[e.target.value][1];
     form.elements.c_desc.value = c1; form.elements.c_flat.value = c2; form.elements.c_climb.value = c3;
   } else if (/^c_/.test(name)) syncPresetFromColors();
+  if (name === "race_title") setTitle(state.file, e.target.value.trim());
   syncOptionLabels(); saveOptions(); updateBatch();
   if (isStyleField(name)) { draw(); return; }  // style: local redraw only
   if (["saturation", "lighten", "hillshade"].includes(name)) return;  // final basemap only, nothing to preview
