@@ -34,6 +34,7 @@ function readOptions(file = state.file) {
   o.zoom = +o.zoom; o.waypoint_radius_m = +o.waypoint_radius_m; o.overlap_km = +o.overlap_km;
   o.same_scale = form.elements.same_scale.checked;
   o.print_scale = +o.print_scale || null;
+  o.saturation = +o.saturation; o.lighten = +o.lighten; o.hillshade = +o.hillshade;
   o.part_tables = form.elements.part_tables.checked;
   o.final_table = form.elements.final_table.checked;
   // custom split, once this file has one (until then the equal split
@@ -247,6 +248,9 @@ function syncOptionLabels() {
   $("zoomOut").textContent = o.zoom;
   $("radiusOut").textContent = o.waypoint_radius_m;
   $("overlapOut").textContent = o.overlap_km;
+  $("saturationOut").textContent = Math.round(o.saturation * 100);
+  $("lightenOut").textContent = Math.round(o.lighten * 100);
+  $("hillshadeOut").textContent = o.hillshade ? `${Math.round(o.hillshade * 100)} %` : "off";
   const prov = state.providers?.find((p) => p.id === o.provider);
   $("keyFields").hidden = !prov?.needs_key;
   if (prov?.needs_key) {
@@ -1226,6 +1230,7 @@ form.addEventListener("input", (e) => {
   } else if (/^c_/.test(name)) syncPresetFromColors();
   syncOptionLabels(); saveOptions(); updateBatch();
   if (isStyleField(name)) { draw(); return; }  // style: local redraw only
+  if (["saturation", "lighten", "hillshade"].includes(name)) return;  // final basemap only, nothing to preview
   if (name === "pages") renderSplitList();
   // title only changes text; everything else changes page split / bounds
   scheduleAnalyze(name === "race_title" ? 300 : 120);

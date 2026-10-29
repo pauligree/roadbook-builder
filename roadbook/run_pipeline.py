@@ -113,6 +113,9 @@ def process_one(gpx_path: Path, args, out_override: Path = None, progress=None) 
                                    overlap_km=getattr(args, "overlap_km", fetch_basemap.OVERLAP_KM),
                                    same_scale=getattr(args, "same_scale", False),
                                    print_scale=getattr(args, "print_scale", None),
+                                   saturation=getattr(args, "saturation", 1.0),
+                                   lighten=getattr(args, "lighten", 0.0),
+                                   hillshade_strength=getattr(args, "hillshade", 0.0),
                                    on_page=lambda p, n: progress(2, f"Fetched basemap page {p}/{n}"))
 
     print(f"\n=== [3/4] Rendering {n_pages} page{'s' if n_pages != 1 else ''} ===")
@@ -194,6 +197,12 @@ def main():
     ap.add_argument("--print-scale", type=int, default=None, metavar="N",
                      help="Fixed map scale 1:N, e.g. 25000 or 50000; the page count then follows "
                           "from the track (overrides --pages, not --splits)")
+    ap.add_argument("--saturation", type=float, default=1.0,
+                     help="Basemap colour: 1 = as served (default), 0 = greyscale")
+    ap.add_argument("--lighten", type=float, default=0.0,
+                     help="Blend the basemap towards white, 0..1 (default 0)")
+    ap.add_argument("--hillshade", type=float, default=0.0, metavar="STRENGTH",
+                     help="Relief shading from open elevation tiles, 0..1 (default 0 = off)")
     ap.add_argument("--no-tile-cache", dest="tile_cache", action="store_false",
                      help="Download every basemap tile again instead of reusing work/tiles/")
     ap.add_argument("--race-title", default=None)

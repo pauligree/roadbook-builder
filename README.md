@@ -297,6 +297,18 @@ The scale bar shows the scale (`1 km · 1:25,000`). A big scale needs a
 higher `--zoom` to stay sharp (1:25,000 → zoom 15 or so); the web app's
 zoom note shows the resulting print ppi. Web app: *Map scale* under Options.
 
+### Basemap look (`--saturation`, `--lighten`, `--hillshade`)
+
+Busy topo maps can drown the coloured track. `--saturation 0.5` mutes the
+basemap's colours (0 = greyscale), `--lighten 0.3` fades it towards white.
+`--hillshade 0.6` adds relief shading computed from the open
+[Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on AWS (no
+key; cached in `work/tiles/terrarium/` like map tiles; credited in the
+attribution line). Useful on styles without their own relief, or to
+strengthen it. Applied to the page images only — cached tiles stay as
+served, so changing these never re-downloads the map. Web app: three
+sliders under Options (final PDF only; the preview has no basemap).
+
 ### Waypoint tables
 
 Two kinds of table page, both on by default:

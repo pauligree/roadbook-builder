@@ -89,6 +89,9 @@ class RenderOptions:
     overlap_km: float = fetch_basemap.OVERLAP_KM  # neighbouring track shown faded on each map
     same_scale: bool = False  # every map page at the largest page's scale
     print_scale: int | None = None  # fixed 1:N; page count then follows from the track
+    saturation: float = 1.0  # basemap colour, 0 = greyscale
+    lighten: float = 0.0     # basemap blended towards white
+    hillshade: float = 0.0   # relief shading strength, 0 = off
     race_title: str | None = None
     tile_workers: int = 4
     style: dict = field(default_factory=dict)  # see render_pages.DEFAULT_STYLE / clean_style()
@@ -103,6 +106,9 @@ class RenderOptions:
         opts.overlap_km = max(0.0, min(float(opts.overlap_km), 5.0))
         opts.same_scale = bool(opts.same_scale)
         opts.print_scale = max(5000, min(int(opts.print_scale), 500000)) if opts.print_scale else None
+        opts.saturation = max(0.0, min(float(opts.saturation), 1.5))
+        opts.lighten = max(0.0, min(float(opts.lighten), 0.9))
+        opts.hillshade = max(0.0, min(float(opts.hillshade), 1.0))
         opts.style = clean_style(opts.style)
         if opts.splits:
             opts.splits = sorted({round(float(k), 3) for k in opts.splits})[:50] or None
@@ -122,6 +128,7 @@ class RenderOptions:
             race_title=d["race_title"], style=d["style"], splits=d["splits"],
             part_tables=d["part_tables"], final_table=d["final_table"],
             overlap_km=d["overlap_km"], same_scale=d["same_scale"], print_scale=d["print_scale"],
+            saturation=d["saturation"], lighten=d["lighten"], hillshade=d["hillshade"],
         )
 
 

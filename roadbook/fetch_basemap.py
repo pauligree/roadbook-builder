@@ -93,7 +93,7 @@ from pathlib import Path
 
 import numpy as np
 import requests
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 from roadbook import layout
 from roadbook.config import LOCAL_CONFIG, WORK_DIR
@@ -213,6 +213,8 @@ def build_tile_url(provider, z, x, y, style=None, api_key=None):
         # SAME z/x/y grid opentopomap/deg2tile use, giving genuine 512x512
         # retina tiles that tile together correctly.
         return f"https://api.maptiler.com/maps/{style}/256/{z}/{x}/{y}@2x.png?key={api_key}"
+    elif provider == DEM["id"]:
+        return DEM["url"].format(z=z, x=x, y=y)
     else:
         raise ValueError(f"Unknown provider: {provider}")
 
@@ -220,7 +222,8 @@ def build_tile_url(provider, z, x, y, style=None, api_key=None):
 def tile_cache_path(provider, z, x, y, style=None):
     # opentopomap has a single style; for the others the style/map ID picks
     # the look, so it is part of the key ("mapbox/outdoors-v12" -> one dir)
-    style_dir = re.sub(r"[^\w.-]+", "_", style) if style and PROVIDERS[provider]["needs_key"] else "default"
+    keyed = PROVIDERS.get(provider, {}).get("needs_key")  # the DEM isn't in PROVIDERS
+    style_dir = re.sub(r"[^\w.-]+", "_", style) if style and keyed else "default"
     return TILE_CACHE_DIR / provider / style_dir / str(z) / str(x) / f"{y}.tile"
 
 
@@ -233,6 +236,66 @@ def read_cached_tile(path):
         return Image.open(path).convert("RGB")
     except (OSError, ValueError):
         return None
+
+
+# ---- basemap tuning ------------------------------------------------------
+# Elevation tiles for --hillshade: the open Terrain Tiles on AWS (Terrarium
+# encoding, no key), on the same z/x/y grid as the map tiles.
+DEM = dict(
+    id="terrarium",
+    url="https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
+    max_zoom=15,
+    attribution="Relief: Terrain Tiles (Mapzen, AWS Open Data)",
+)
+
+
+def tune_basemap(img, saturation=1.0, lighten=0.0):
+    """Mute the basemap so the track stands out: `saturation` 1 = as
+    served, 0 = greyscale; `lighten` 0..1 blends towards white."""
+    if saturation != 1.0:
+        img = ImageEnhance.Color(img).enhance(saturation)
+    if lighten > 0:
+        img = Image.blend(img, Image.new("RGB", img.size, "white"), lighten)
+    return img
+
+
+def dem_mosaic(session, box, zoom, size, workers=4, tile_cache=True):
+    """Elevation in metres for `box`, resampled to `size` (w, h) px — the
+    cropped map mosaic's size. Fetched at min(zoom, DEM max zoom); None
+    if too many tiles failed (hillshade is an extra, never fatal)."""
+    z = min(zoom, DEM["max_zoom"])
+    ext = page_extent(box, z, 256)
+    x0, x1, y0, y1 = ext["tiles"]
+    try:
+        rgb, n_total, n_failed, _cached = build_mosaic(session, DEM["id"], z, x0, x1, y0, y1,
+                                                       tile_px=256, workers=workers, tile_cache=tile_cache)
+    except BasemapFetchError:  # e.g. a 4xx from the tile host
+        return None
+    if n_total and n_failed / n_total > 0.2:
+        return None
+    a = np.asarray(rgb.crop(ext["crop"]), dtype=np.float32)
+    elev = a[..., 0] * 256 + a[..., 1] + a[..., 2] / 256 - 32768  # Terrarium encoding
+    return np.asarray(Image.fromarray(elev).resize(size, Image.Resampling.BILINEAR))
+
+
+def hillshade(elev, px_m, azimuth=315.0, altitude=45.0):
+    """Lambertian shading of `elev` (metres, px_m metres per pixel), lit
+    from the north-west, normalised so flat ground = 1 and only slopes
+    facing away from the light come out darker (0..1)."""
+    dzdy, dzdx = np.gradient(elev, px_m)
+    slope = np.arctan(np.hypot(dzdx, dzdy))
+    aspect = np.arctan2(-dzdx, dzdy)  # image rows run north -> south
+    az, alt = math.radians(azimuth), math.radians(altitude)
+    shade = (math.sin(alt) * np.cos(slope) +
+             math.cos(alt) * np.sin(slope) * np.cos(az - aspect))
+    return np.clip(shade / math.sin(alt), 0.0, 1.0)
+
+
+def apply_hillshade(img, shade, strength):
+    """Multiply-blend: darken by (1 - shade) x strength."""
+    factor = 1.0 - strength * (1.0 - shade)
+    out = np.asarray(img, dtype=np.float32) * factor[..., None]
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
 
 def fetch_tile(session, provider, z, x, y, style=None, api_key=None, retries=3, save_to=None):
@@ -492,7 +555,8 @@ class BasemapFetchError(RuntimeError):
 def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
                      verbose=True, max_failed_fraction=0.5,
                      provider=None, api_key=None, style_id=None, on_page=None, splits=None,
-                     tile_cache=True, overlap_km=OVERLAP_KM, same_scale=False, print_scale=None):
+                     tile_cache=True, overlap_km=OVERLAP_KM, same_scale=False, print_scale=None,
+                     saturation=1.0, lighten=0.0, hillshade_strength=0.0):
     """Fetch+stitch the basemap mosaic for every page and write
     pageN_raw.jpg + bounds.json + provider.json into out_dir. Returns the
     bounds dict. This is the single implementation used by both the CLI
@@ -512,6 +576,10 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
     `overlap_km` / `same_scale` / `print_scale`: see page_bboxes; the
     overlap and print scale are written into bounds.json so render_pages
     draws the same stretch faded and labels the scale.
+
+    `saturation` / `lighten` mute the basemap (see tune_basemap);
+    `hillshade_strength` 0..1 shades relief from elevation tiles on top
+    (see DEM). Applied to pageN_raw.jpg; cached tiles stay as served.
 
     `tile_cache` reads/writes the persistent tile cache (TILE_CACHE_DIR);
     False always downloads and stores nothing.
@@ -562,6 +630,14 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
             )
 
         mosaic = mosaic.crop(ext["crop"])  # exactly the panel-filling box
+        if hillshade_strength > 0:
+            elev = dem_mosaic(session, box, zoom, mosaic.size, workers=workers, tile_cache=tile_cache)
+            if elev is None:
+                print(f"\n  !! page {p}: elevation tiles failed — no hillshade on this page", end=" ")
+            else:
+                px_m = ground_width_km(ext) * 1000 / mosaic.width
+                mosaic = apply_hillshade(mosaic, hillshade(elev, px_m), hillshade_strength)
+        mosaic = tune_basemap(mosaic, saturation, lighten)
         img_path = out_dir / f"page{p}_raw.jpg"
         mosaic.save(img_path, quality=92)
 
@@ -583,7 +659,8 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
         json.dump(bounds_out, f, indent=2)
 
     with open(out_dir / "provider.json", "w") as f:
-        json.dump(dict(provider=provider, style=style, attribution=cfg["attribution"]), f, indent=2)
+        attribution = cfg["attribution"] + (f" | {DEM['attribution']}" if hillshade_strength > 0 else "")
+        json.dump(dict(provider=provider, style=style, attribution=attribution), f, indent=2)
 
     return bounds_out
 
@@ -623,6 +700,12 @@ def main():
     ap.add_argument("--print-scale", type=int, default=None, metavar="N",
                      help="Fixed map scale 1:N, e.g. 25000 or 50000; the page count then follows "
                           "from the track (overrides --pages, not --splits)")
+    ap.add_argument("--saturation", type=float, default=1.0,
+                     help="Basemap colour: 1 = as served (default), 0 = greyscale")
+    ap.add_argument("--lighten", type=float, default=0.0,
+                     help="Blend the basemap towards white, 0..1 (default 0), so the track stands out")
+    ap.add_argument("--hillshade", type=float, default=0.0, metavar="STRENGTH",
+                     help="Add relief shading from open elevation tiles, 0..1 (default 0 = off)")
     ap.add_argument("--pad-deg", type=float, default=0.02, help="Lat/lon padding around each page's track (default: 0.02)")
     ap.add_argument("--workers", type=int, default=4, help="Concurrent tile downloads (keep modest, default: 4)")
     ap.add_argument("--out-dir", default=None, help="Output folder (default: work/<slug>_basemaps)")
@@ -646,7 +729,8 @@ def main():
                      provider=args.provider, api_key=args.api_key, style_id=style_id,
                      splits=args.splits, tile_cache=args.tile_cache,
                      overlap_km=args.overlap_km, same_scale=args.same_scale,
-                     print_scale=args.print_scale)
+                     print_scale=args.print_scale, saturation=args.saturation,
+                     lighten=args.lighten, hillshade_strength=args.hillshade)
 
     attribution = PROVIDERS[args.provider]["attribution"]
     print(f"\nSaved basemap mosaics + bounds -> {out_dir}")
