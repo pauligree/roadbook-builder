@@ -210,6 +210,7 @@ python -m roadbook.run_pipeline input/mytrack.gpx --provider maptiler
   map ID) in `config.local.json` at the project root — gitignored, used by
   both the CLI and the web app when no `--api-key` / env var is given:
   `{"maptiler": {"api_key": "xxxx", "style_id": "<map id>"}}`
+  Easiest: `cp config.local.example.json config.local.json`, then edit it.
   With a MapTiler key configured (here or via the env var), **maptiler
   becomes the default provider** for both the CLI and the web app.
 - Also requests genuine 512×512px `@2x` retina tiles on the same tile grid

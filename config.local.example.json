@@ -1,0 +1,6 @@
+{
+  "maptiler": {
+    "api_key": "YOUR_MAPTILER_KEY_HERE",
+    "style_id": "topo-v4"
+  }
+}

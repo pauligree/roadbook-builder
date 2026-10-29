@@ -11,3 +11,11 @@ input-TORX/*
 !input/.gitkeep
 !input-TORX/.gitkeep
 config.local.json
+
+# Secrets — never commit
+.env
+.env.*
+*.local.json
+!config.local.example.json
+*.pem
+*.key
