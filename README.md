@@ -16,10 +16,12 @@ push `--zoom` as high as you want for genuinely sharp print output.
 
 ## 1. One-time setup
 
-Requires Python 3.10+.
+Requires Python 3.10+ and git.
 
 ```bash
-cd ~/Documents/ANTIGRAVITY/"Roadbook Builder"
+cd ~
+git clone https://github.com/pauligree/roadbook-builder.git
+cd roadbook-builder
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -28,7 +30,7 @@ pip install -r requirements.txt
 To come back later in a new terminal session, you only need:
 
 ```bash
-cd ~/Documents/ANTIGRAVITY/"Roadbook Builder"
+cd ~/roadbook-builder
 source .venv/bin/activate
 ```
 
@@ -93,8 +95,9 @@ python -m webapp.server
 **Desktop launcher.** `scripts/make_desktop_app.sh` creates
 `~/Desktop/Roadbook Builder.app`: double-click starts the server in the
 background (if not already running; log in `work/server.log`) and opens the
-app in your default browser. First launch may ask to allow access to the
-Documents folder — click *Allow*. Stop the server with
+app in your default browser. If the project lives inside a protected folder
+(e.g. `~/Documents`), first launch may ask to allow access to it — click
+*Allow*. Stop the server with
 `scripts/launch.sh --stop`. Re-run the script if you move the project folder.
 
 GPX files are listed from `input/` and `input-TORX/`; uploads go to `input/`.
@@ -397,7 +400,7 @@ caching tiles locally instead of re-fetching every time.
 ## 10. Folder structure
 
 ```
-Roadbook Builder/
+roadbook-builder/
 ├── README.md                 (this file)
 ├── requirements.txt
 ├── input/                    put source .gpx files here
