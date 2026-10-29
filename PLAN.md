@@ -64,8 +64,8 @@ Priority order:
    aspect), ✅ custom breaks at chosen waypoints (`--splits`), ✅ consistent
    scale across pages (`--same-scale`), ✅ ~0.5 km overlap drawn dashed
    (`--overlap-km`).
-2. **Fixed print scale** option (1:25k / 1:50k) + scale label; page count
-   derived automatically.
+2. ✅ **Fixed print scale** option (1:25k / 1:50k) + scale label; page count
+   derived automatically (`--print-scale N`, `fetch_basemap.scale_edges`).
 3. **Better label collision avoidance** — more candidate positions, leader
    lines when crowded.
 4. **Basemap tuning** — optional desaturate/lighten so track pops, hillshade.

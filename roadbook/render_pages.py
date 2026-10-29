@@ -410,7 +410,10 @@ def build_page(mode, page, ctx):
                 chosen = (best[1], best[2])
             obstacle_boxes.append(chosen[1])
 
-        sb_len = 5 if (xmax - xmin) * km_per_deg_lon < 20 else 10
+        # longest round length up to ~40 % of the map width (5 km on a
+        # 15-20 km wide map, 1 km at 1:25k where the map is ~5 km wide)
+        width_km = (xmax - xmin) * km_per_deg_lon
+        sb_len = max([l for l in (0.5, 1, 2, 5, 10, 20, 50) if l <= width_km * 0.4] or [0.5])
         sb_len_deg = sb_len / km_per_deg_lon
         sb_x0 = xmax - sb_len_deg - (xmax - xmin) * 0.06
         sb_y0 = ymin + (ymax - ymin) * 0.05
@@ -418,7 +421,9 @@ def build_page(mode, page, ctx):
                   path_effects=[pe.Stroke(linewidth=3.6, foreground="white"), pe.Normal()])
         ax_m.plot([sb_x0, sb_x0], [sb_y0 - (ymax - ymin) * 0.01, sb_y0 + (ymax - ymin) * 0.01], color="black", linewidth=2.4, zorder=9)
         ax_m.plot([sb_x0 + sb_len_deg, sb_x0 + sb_len_deg], [sb_y0 - (ymax - ymin) * 0.01, sb_y0 + (ymax - ymin) * 0.01], color="black", linewidth=2.4, zorder=9)
-        ax_m.text(sb_x0 + sb_len_deg / 2, sb_y0 + (ymax - ymin) * 0.018, f"{sb_len} km", ha="center", fontsize=8.5,
+        print_scale = bb.get("print_scale")
+        sb_text = f"{sb_len:g} km" + (f"  ·  1:{print_scale:,}" if print_scale else "")
+        ax_m.text(sb_x0 + sb_len_deg / 2, sb_y0 + (ymax - ymin) * 0.018, sb_text, ha="center", fontsize=8.5,
                   bbox=LABEL_BG, zorder=9)
 
         nx0, ny0 = xmin + (xmax - xmin) * 0.05, ymax - (ymax - ymin) * 0.12

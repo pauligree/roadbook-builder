@@ -287,6 +287,16 @@ page's scale instead (smaller parts simply get more surrounding terrain),
 which keeps distances on the map comparable between pages. The web app has
 both under Options and shows the resulting scale (`Map scale ≈ 1:64,000`).
 
+**Fixed print scale.** `--print-scale 25000` (or 50000, ...) prints every
+map at exactly 1:25,000 and works out the page count itself: as few pages
+as possible with each part's track (plus the overlap and a margin for
+labels) on its map — an equal-distance split when one fits, otherwise each
+page filled as far as it goes. `--pages` is then ignored; `--splits` still
+wins, with a warning for any page whose track doesn't fit at that scale.
+The scale bar shows the scale (`1 km · 1:25,000`). A big scale needs a
+higher `--zoom` to stay sharp (1:25,000 → zoom 15 or so); the web app's
+zoom note shows the resulting print ppi. Web app: *Map scale* under Options.
+
 ### Waypoint tables
 
 Two kinds of table page, both on by default:

@@ -33,6 +33,7 @@ function readOptions(file = state.file) {
   o.pages = +form.elements.pages.value;  // read directly: disabled fields skip FormData
   o.zoom = +o.zoom; o.waypoint_radius_m = +o.waypoint_radius_m; o.overlap_km = +o.overlap_km;
   o.same_scale = form.elements.same_scale.checked;
+  o.print_scale = +o.print_scale || null;
   o.part_tables = form.elements.part_tables.checked;
   o.final_table = form.elements.final_table.checked;
   // custom split, once this file has one (until then the equal split
@@ -72,8 +73,10 @@ function seedSplits(d) {
 
 function renderSplitList() {
   const d = state.data, custom = splitMode() === "waypoints";
-  $("splitField").hidden = !d || (!custom && +form.elements.pages.value < 2);
-  form.elements.pages.disabled = custom;
+  const fixedScale = !!form.elements.print_scale.value;
+  $("splitField").hidden = !d || (!custom && !fixedScale && +form.elements.pages.value < 2);
+  form.elements.pages.disabled = custom || fixedScale;  // page count from the splits / the scale
+  form.elements.same_scale.disabled = fixedScale;
   const list = $("splitList");
   list.hidden = !custom || !d;
   if (list.hidden) return;
@@ -240,7 +243,7 @@ const labelKey = (where, pnum, which) => `${where}:${pnum}:${typeof which === "s
 
 function syncOptionLabels() {
   const o = readOptions();
-  $("pagesOut").textContent = o.splits && state.data ? state.data.n_pages : o.pages;
+  $("pagesOut").textContent = (o.splits || o.print_scale) && state.data ? state.data.n_pages : o.pages;
   $("zoomOut").textContent = o.zoom;
   $("radiusOut").textContent = o.waypoint_radius_m;
   $("overlapOut").textContent = o.overlap_km;
@@ -423,6 +426,10 @@ function updateNotes() {
   } else if (splitMode() === "waypoints") {
     pn.textContent = "Tick waypoints below to end pages there.";
     pn.className = "note";
+  } else if (d.print_scale) {
+    pn.textContent = `${d.n_pages} page${d.n_pages > 1 ? "s" : ""} needed at 1:${d.print_scale.toLocaleString("en")} · ` +
+      `≈ ${(d.stats.total_km / d.n_pages).toFixed(1)} km per page`;
+    pn.className = "note";
   } else if (d.pages_forced_single) {
     pn.textContent = "Filename contains “backup route” → always 1 page.";
     pn.className = "note warn";
@@ -438,7 +445,12 @@ function updateNotes() {
   // print scale per map page (1:N, rounded like a map's), see api.ground_scale
   const nice = (n) => { const m = 10 ** Math.floor(Math.log10(n) - 1); return Math.round(n / m) * m; };
   const scales = [...new Set(d.pages.map((p) => nice(p.scale)))];
-  $("scaleNote").textContent = scales.length === 1
+  const overflow = d.pages.filter((p) => !p.fits).map((p) => p.page);
+  $("scaleNote").className = "note scale-note" + (overflow.length ? " warn" : "");
+  if (overflow.length) {
+    $("scaleNote").textContent = `Track doesn't fit the map on page ${overflow.join(", ")} at this scale — ` +
+      "add page ends there or pick a smaller scale.";
+  } else $("scaleNote").textContent = scales.length === 1
     ? `Map scale ≈ 1:${scales[0].toLocaleString("en")}`
     : `Map scale ≈ 1:${Math.min(...scales).toLocaleString("en")} – 1:${Math.max(...scales).toLocaleString("en")}`;
 }
@@ -890,12 +902,14 @@ function drawPage(W, H) {
   }
 
   // scale bar, north arrow, colorbar, attribution
-  const sbKm = (b.east - b.west) * kmLon < 20 ? 5 : 10;
+  // same rule as render_pages: longest round length up to ~40 % of the width
+  const sbKm = Math.max(...[0.5, 1, 2, 5, 10, 20, 50].filter((l) => l <= (b.east - b.west) * kmLon * 0.4), 0.5);
   const sbW = sbKm / kmLon / (b.east - b.west) * mw;
   const sbx = mx + mw * 0.94 - sbW, sby = my + mh * 0.95;
   ctx.strokeStyle = "#fff"; ctx.lineWidth = pt(3.6); ctx.beginPath(); ctx.moveTo(sbx, sby); ctx.lineTo(sbx + sbW, sby); ctx.stroke();
   ctx.strokeStyle = "#000"; ctx.lineWidth = pt(2.4); ctx.beginPath(); ctx.moveTo(sbx, sby); ctx.lineTo(sbx + sbW, sby); ctx.stroke();
-  label(`${sbKm} km`, sbx + sbW / 2, sby - pt(16), { size: pt(8.5), align: "center" });
+  label(`${sbKm} km${d.print_scale ? `  ·  1:${d.print_scale.toLocaleString("en")}` : ""}`,
+        sbx + sbW / 2, sby - pt(16), { size: pt(8.5), align: "center" });
   const nx = mx + mw * 0.05, ny = my + mh * 0.07;
   ctx.fillStyle = "#000"; ctx.beginPath(); ctx.moveTo(nx, ny - pt(14)); ctx.lineTo(nx - pt(4), ny - pt(4)); ctx.lineTo(nx + pt(4), ny - pt(4)); ctx.fill();
   label("N", nx, ny, { size: pt(10.5), bold: true, align: "center" });

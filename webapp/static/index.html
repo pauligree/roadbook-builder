@@ -98,6 +98,16 @@
         </div>
 
         <label class="field">
+          <span>Map scale</span>
+          <select name="print_scale">
+            <option value="">Auto — zoom each page to fit</option>
+            <option value="25000">1:25,000 (fixed, more pages)</option>
+            <option value="50000">1:50,000 (fixed)</option>
+            <option value="75000">1:75,000 (fixed)</option>
+            <option value="100000">1:100,000 (fixed)</option>
+          </select>
+        </label>
+        <label class="field">
           <span>Overlap with next/previous part <output id="overlapOut">0.5</output> km</span>
           <input name="overlap_km" type="range" min="0" max="2" step="0.25" value="0.5">
           <small class="note">Neighbouring track shown dashed on each map</small>

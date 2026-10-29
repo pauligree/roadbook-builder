@@ -97,6 +97,8 @@ def process_one(gpx_path: Path, args, out_override: Path = None, progress=None) 
     n_pages = effective_pages(gpx_path, args, data["total_dist_km"])
     if splits:
         print(f"  split at {', '.join(f'{k:.2f}' for k in splits)} km -> {n_pages} pages")
+    elif getattr(args, "print_scale", None):
+        print(f"  fixed scale 1:{args.print_scale:,} -> page count follows from the track")
     elif n_pages != args.pages:
         print(f"(filename matches a single-page marker -> generating 1 page instead of {args.pages})")
 
@@ -110,6 +112,7 @@ def process_one(gpx_path: Path, args, out_override: Path = None, progress=None) 
                                    tile_cache=getattr(args, "tile_cache", True),
                                    overlap_km=getattr(args, "overlap_km", fetch_basemap.OVERLAP_KM),
                                    same_scale=getattr(args, "same_scale", False),
+                                   print_scale=getattr(args, "print_scale", None),
                                    on_page=lambda p, n: progress(2, f"Fetched basemap page {p}/{n}"))
 
     print(f"\n=== [3/4] Rendering {n_pages} page{'s' if n_pages != 1 else ''} ===")
@@ -188,6 +191,9 @@ def main():
                      help="Track shown (faded) beyond each page's ends, in km (0 = none)")
     ap.add_argument("--same-scale", action="store_true",
                      help="Print every map page at the same scale (the largest page's)")
+    ap.add_argument("--print-scale", type=int, default=None, metavar="N",
+                     help="Fixed map scale 1:N, e.g. 25000 or 50000; the page count then follows "
+                          "from the track (overrides --pages, not --splits)")
     ap.add_argument("--no-tile-cache", dest="tile_cache", action="store_false",
                      help="Download every basemap tile again instead of reusing work/tiles/")
     ap.add_argument("--race-title", default=None)

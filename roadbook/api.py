@@ -88,6 +88,7 @@ class RenderOptions:
     waypoint_radius_m: float = 60.0
     overlap_km: float = fetch_basemap.OVERLAP_KM  # neighbouring track shown faded on each map
     same_scale: bool = False  # every map page at the largest page's scale
+    print_scale: int | None = None  # fixed 1:N; page count then follows from the track
     race_title: str | None = None
     tile_workers: int = 4
     style: dict = field(default_factory=dict)  # see render_pages.DEFAULT_STYLE / clean_style()
@@ -101,6 +102,7 @@ class RenderOptions:
         opts.waypoint_radius_m = max(1.0, float(opts.waypoint_radius_m))
         opts.overlap_km = max(0.0, min(float(opts.overlap_km), 5.0))
         opts.same_scale = bool(opts.same_scale)
+        opts.print_scale = max(5000, min(int(opts.print_scale), 500000)) if opts.print_scale else None
         opts.style = clean_style(opts.style)
         if opts.splits:
             opts.splits = sorted({round(float(k), 3) for k in opts.splits})[:50] or None
@@ -119,7 +121,7 @@ class RenderOptions:
             waypoint_radius_m=d["waypoint_radius_m"], tile_workers=d["tile_workers"],
             race_title=d["race_title"], style=d["style"], splits=d["splits"],
             part_tables=d["part_tables"], final_table=d["final_table"],
-            overlap_km=d["overlap_km"], same_scale=d["same_scale"],
+            overlap_km=d["overlap_km"], same_scale=d["same_scale"], print_scale=d["print_scale"],
         )
 
 
@@ -174,7 +176,9 @@ def analyze(gpx_path, opts: RenderOptions):
             for (km, name, plat, plon, pele) in data["pois"]]
 
     boxes = fetch_basemap.page_bboxes(data, n_pages, PAD_DEG, splits=opts.splits,
-                                      overlap_km=opts.overlap_km, same_scale=opts.same_scale)
+                                      overlap_km=opts.overlap_km, same_scale=opts.same_scale,
+                                      print_scale=opts.print_scale)
+    n_pages = len(boxes)  # a fixed print scale picks its own page count
     pages = []
     for box in boxes:
         d0, d1 = box["d0"], box["d1"]
@@ -183,7 +187,7 @@ def analyze(gpx_path, opts: RenderOptions):
         d_ele = np.diff(seg_ele)
         pages.append(dict(
             page=box["page"], d0=d0, d1=d1, overlap_km=box["overlap_km"],
-            scale=round(ground_scale(box)),
+            scale=round(ground_scale(box)), fits=box.get("fits", True),
             bounds=_page_bounds(box, opts.zoom, provider["tile_px"]),
             subtitle=page_subtitle(d0, d1, bool(opts.splits), [(p["km"], p["name"]) for p in pois],
                                    data["total_dist_km"],
@@ -218,7 +222,8 @@ def analyze(gpx_path, opts: RenderOptions):
             min_ele=data["min_ele"], max_ele=data["max_ele"], points=int(len(lats)),
         ),
         n_pages=n_pages,
-        pages_forced_single=not opts.splits and n_pages != opts.pages,
+        pages_forced_single=not opts.splits and not opts.print_scale and n_pages != opts.pages,
+        print_scale=opts.print_scale,
         splits=[p["d1"] for p in pages[:-1]] if opts.splits else None,
         track=dict(
             lat=np.round(lats[idx], 6).tolist(), lon=np.round(lons[idx], 6).tolist(),
