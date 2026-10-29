@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from roadbook import fetch_basemap, parse_gpx, run_pipeline
+from roadbook import fetch_basemap, layout, parse_gpx, run_pipeline
 from roadbook.render_pages import (
     GRADIENT_COLORS, GRADIENT_VMAX_CLIP, HEIGHT_RATIOS, PAGE_SIZE_IN,
     build_sheets, clean_name, compute_gradient, page_subtitle, table_header,
@@ -86,6 +86,8 @@ class RenderOptions:
     part_tables: bool = True  # waypoint-table page after each map page
     final_table: bool = True  # final waypoint table of all points
     waypoint_radius_m: float = 60.0
+    overlap_km: float = fetch_basemap.OVERLAP_KM  # neighbouring track shown faded on each map
+    same_scale: bool = False  # every map page at the largest page's scale
     race_title: str | None = None
     tile_workers: int = 4
     style: dict = field(default_factory=dict)  # see render_pages.DEFAULT_STYLE / clean_style()
@@ -97,6 +99,8 @@ class RenderOptions:
         opts.pages = max(1, min(int(opts.pages), 20))
         opts.zoom = max(8, min(int(opts.zoom), 17))
         opts.waypoint_radius_m = max(1.0, float(opts.waypoint_radius_m))
+        opts.overlap_km = max(0.0, min(float(opts.overlap_km), 5.0))
+        opts.same_scale = bool(opts.same_scale)
         opts.style = clean_style(opts.style)
         if opts.splits:
             opts.splits = sorted({round(float(k), 3) for k in opts.splits})[:50] or None
@@ -115,6 +119,7 @@ class RenderOptions:
             waypoint_radius_m=d["waypoint_radius_m"], tile_workers=d["tile_workers"],
             race_title=d["race_title"], style=d["style"], splits=d["splits"],
             part_tables=d["part_tables"], final_table=d["final_table"],
+            overlap_km=d["overlap_km"], same_scale=d["same_scale"],
         )
 
 
@@ -141,6 +146,12 @@ def _page_bounds(box, zoom, tile_px):
                 tiles=(x1 - x0) * (y1 - y0))
 
 
+def ground_scale(box):
+    """Approximate print scale denominator (1:N) of a page's map panel."""
+    panel_w_m = layout.map_panel_size_in()[0] * 0.0254
+    return fetch_basemap.ground_width_km(box) * 1000 / panel_w_m
+
+
 def analyze(gpx_path, opts: RenderOptions):
     gpx_path = Path(gpx_path)
     data = _parsed(gpx_path, opts.waypoint_radius_m)
@@ -162,7 +173,8 @@ def analyze(gpx_path, opts: RenderOptions):
     pois = [dict(km=km, name=clean_name(name), lat=plat, lon=plon, ele=pele)
             for (km, name, plat, plon, pele) in data["pois"]]
 
-    boxes = fetch_basemap.page_bboxes(data, n_pages, PAD_DEG, splits=opts.splits)
+    boxes = fetch_basemap.page_bboxes(data, n_pages, PAD_DEG, splits=opts.splits,
+                                      overlap_km=opts.overlap_km, same_scale=opts.same_scale)
     pages = []
     for box in boxes:
         d0, d1 = box["d0"], box["d1"]
@@ -170,7 +182,8 @@ def analyze(gpx_path, opts: RenderOptions):
         seg_ele = eles[m]
         d_ele = np.diff(seg_ele)
         pages.append(dict(
-            page=box["page"], d0=d0, d1=d1,
+            page=box["page"], d0=d0, d1=d1, overlap_km=box["overlap_km"],
+            scale=round(ground_scale(box)),
             bounds=_page_bounds(box, opts.zoom, provider["tile_px"]),
             subtitle=page_subtitle(d0, d1, bool(opts.splits), [(p["km"], p["name"]) for p in pois],
                                    data["total_dist_km"],

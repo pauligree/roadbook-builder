@@ -353,25 +353,58 @@ def page_extent(box, zoom, tile_px):
     )
 
 
-def page_bboxes(data, n_pages, pad_deg=0.02, splits=None, fill=True):
-    """One lat/lon box per page: the page's track segment plus `pad_deg`,
-    grown to fill the map panel when `fill`. With `splits`, the page count
-    is len(edges) - 1, not n_pages."""
+# Each map also shows this much of the neighbouring parts' track (drawn
+# faded by render_pages), so the hand-over between pages is easy to follow.
+OVERLAP_KM = 0.5
+
+
+def page_bboxes(data, n_pages, pad_deg=0.02, splits=None, fill=True,
+                overlap_km=OVERLAP_KM, same_scale=False):
+    """One lat/lon box per page: the page's track segment, extended by
+    `overlap_km` into the neighbouring parts, plus `pad_deg`, grown to fill
+    the map panel when `fill`. With `splits`, the page count is
+    len(edges) - 1, not n_pages.
+
+    `same_scale` grows every box (about its centre) to the ground size of
+    the largest one, so all map pages print at one scale."""
     lats, lons, dist = data["lats"], data["lons"], data["dist"]
     dist_km = dist / 1000.0
     edges = page_edges(data["total_dist_km"], n_pages, splits)
     boxes = []
     for i in range(len(edges) - 1):
         d0, d1 = edges[i], edges[i + 1]
-        mask = (dist_km >= d0 - 0.1) & (dist_km <= d1 + 0.1)
+        mask = (dist_km >= d0 - 0.1 - overlap_km) & (dist_km <= d1 + 0.1 + overlap_km)
         la, lo = lats[mask], lons[mask]
         box = dict(
-            page=i + 1, d0=float(d0), d1=float(d1),
+            page=i + 1, d0=float(d0), d1=float(d1), overlap_km=float(overlap_km),
             south=float(la.min() - pad_deg), north=float(la.max() + pad_deg),
             west=float(lo.min() - pad_deg), east=float(lo.max() + pad_deg),
         )
         boxes.append(fill_panel(box) if fill else box)
+    if same_scale and fill:
+        boxes = same_scale_boxes(boxes)
     return boxes
+
+
+def ground_width_km(box):
+    k = math.cos(math.radians((box["south"] + box["north"]) / 2))
+    return (box["east"] - box["west"]) * k * 111.32
+
+
+def same_scale_boxes(boxes, aspect=None):
+    """Panel-filling boxes regrown about their centres to the widest box's
+    ground width (heights follow from the panel aspect). Same equirectangular
+    scaling as fill_panel, so the result still fills the panel."""
+    aspect = aspect or layout.map_panel_aspect()
+    width_km = max(ground_width_km(b) for b in boxes)
+    out = []
+    for b in boxes:
+        lat_c, lon_c = (b["south"] + b["north"]) / 2, (b["west"] + b["east"]) / 2
+        half_lon = width_km / (111.32 * math.cos(math.radians(lat_c))) / 2
+        half_lat = width_km / aspect / 111.32 / 2
+        out.append(dict(b, west=lon_c - half_lon, east=lon_c + half_lon,
+                        south=lat_c - half_lat, north=lat_c + half_lat))
+    return out
 
 
 class BasemapFetchError(RuntimeError):
@@ -385,7 +418,7 @@ class BasemapFetchError(RuntimeError):
 def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
                      verbose=True, max_failed_fraction=0.5,
                      provider=None, api_key=None, style_id=None, on_page=None, splits=None,
-                     tile_cache=True):
+                     tile_cache=True, overlap_km=OVERLAP_KM, same_scale=False):
     """Fetch+stitch the basemap mosaic for every page and write
     pageN_raw.jpg + bounds.json + provider.json into out_dir. Returns the
     bounds dict. This is the single implementation used by both the CLI
@@ -401,6 +434,9 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
 
     `on_page`, if given, is called as on_page(page, n_pages) after each
     page's mosaic is saved (progress reporting for the web app).
+
+    `overlap_km` / `same_scale`: see page_bboxes; the overlap is written
+    into bounds.json so render_pages draws the same stretch faded.
 
     `tile_cache` reads/writes the persistent tile cache (TILE_CACHE_DIR);
     False always downloads and stores nothing.
@@ -421,7 +457,8 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    boxes = page_bboxes(data, n_pages, pad_deg, splits=splits)
+    boxes = page_bboxes(data, n_pages, pad_deg, splits=splits,
+                        overlap_km=overlap_km, same_scale=same_scale)
     bounds_out = {}
 
     session = requests.Session()
@@ -455,7 +492,7 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
 
         bounds_out[p] = dict(west=ext["west"], east=ext["east"], north=ext["north"],
                              south=ext["south"], d0=box["d0"], d1=box["d1"],
-                             split="custom" if splits else "equal")
+                             split="custom" if splits else "equal", overlap_km=overlap_km)
         if verbose:
             warn = f" ({n_failed} tile(s) failed)" if n_failed else ""
             hits = f", {n_cached} from cache" if n_cached else ""
@@ -499,6 +536,11 @@ def main():
     ap.add_argument("--splits", type=parse_splits, default=None,
                      help="Comma-separated km where pages end, e.g. 12.4,31.0 (overrides --pages: "
                           "pages = number of splits + 1). Default: equal-distance split.")
+    ap.add_argument("--overlap-km", type=float, default=OVERLAP_KM,
+                     help=f"Track shown (faded) beyond each page's ends into the neighbouring "
+                          f"parts, in km (default: {OVERLAP_KM}; 0 = none)")
+    ap.add_argument("--same-scale", action="store_true",
+                     help="Print every map page at the same scale (the largest page's)")
     ap.add_argument("--pad-deg", type=float, default=0.02, help="Lat/lon padding around each page's track (default: 0.02)")
     ap.add_argument("--workers", type=int, default=4, help="Concurrent tile downloads (keep modest, default: 4)")
     ap.add_argument("--out-dir", default=None, help="Output folder (default: work/<slug>_basemaps)")
@@ -520,7 +562,8 @@ def main():
     fetch_all_pages(data, out_dir, n_pages=args.pages, zoom=args.zoom,
                      pad_deg=args.pad_deg, workers=args.workers,
                      provider=args.provider, api_key=args.api_key, style_id=style_id,
-                     splits=args.splits, tile_cache=args.tile_cache)
+                     splits=args.splits, tile_cache=args.tile_cache,
+                     overlap_km=args.overlap_km, same_scale=args.same_scale)
 
     attribution = PROVIDERS[args.provider]["attribution"]
     print(f"\nSaved basemap mosaics + bounds -> {out_dir}")

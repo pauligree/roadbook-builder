@@ -274,6 +274,19 @@ Rif. Deffeyes`) for a custom one. Either way, each page's map is sized to fill t
 whole map panel (no blank bands) — the basemap box is grown to the panel's
 proportions around the page's track.
 
+### Overlap and map scale (`--overlap-km`, `--same-scale`)
+
+Each map also shows the first/last 0.5 km of the neighbouring parts, dashed
+and faded, so the hand-over between pages is easy to follow (profile,
+stats and waypoints still cover only the page's own part). Change it with
+`--overlap-km 1` or turn it off with `--overlap-km 0`.
+
+Every page's map is normally zoomed to fit its own part, so the scale varies
+from page to page. `--same-scale` prints every map page at the largest
+page's scale instead (smaller parts simply get more surrounding terrain),
+which keeps distances on the map comparable between pages. The web app has
+both under Options and shows the resulting scale (`Map scale ≈ 1:64,000`).
+
 ### Waypoint tables
 
 Two kinds of table page, both on by default:

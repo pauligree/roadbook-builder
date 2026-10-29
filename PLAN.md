@@ -61,8 +61,9 @@ render service in Phase 2 option A.
 Priority order:
 
 1. **Smart page split** — ✅ full-bleed (bbox fitted to the map panel
-   aspect) and ✅ custom breaks at chosen waypoints (`--splits`). Still
-   open: consistent scale across pages, ~0.5 km overlap.
+   aspect), ✅ custom breaks at chosen waypoints (`--splits`), ✅ consistent
+   scale across pages (`--same-scale`), ✅ ~0.5 km overlap drawn dashed
+   (`--overlap-km`).
 2. **Fixed print scale** option (1:25k / 1:50k) + scale label; page count
    derived automatically.
 3. **Better label collision avoidance** — more candidate positions, leader

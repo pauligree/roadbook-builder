@@ -31,7 +31,8 @@ function readOptions(file = state.file) {
   const o = {};
   for (const [k, v] of new FormData(form).entries()) if (!isStyleField(k)) o[k] = v;
   o.pages = +form.elements.pages.value;  // read directly: disabled fields skip FormData
-  o.zoom = +o.zoom; o.waypoint_radius_m = +o.waypoint_radius_m;
+  o.zoom = +o.zoom; o.waypoint_radius_m = +o.waypoint_radius_m; o.overlap_km = +o.overlap_km;
+  o.same_scale = form.elements.same_scale.checked;
   o.part_tables = form.elements.part_tables.checked;
   o.final_table = form.elements.final_table.checked;
   // custom split, once this file has one (until then the equal split
@@ -126,7 +127,8 @@ const COLOR_PRESETS = {
 function snapshotOptions() {
   const { api_key, ...rest } = Object.fromEntries(new FormData(form).entries());
   return { ...rest, pages: form.elements.pages.value,  // disabled in custom split: FormData skips it
-    part_tables: form.elements.part_tables.checked, final_table: form.elements.final_table.checked, _v: 2 };
+    part_tables: form.elements.part_tables.checked, final_table: form.elements.final_table.checked,
+    same_scale: form.elements.same_scale.checked, _v: 2 };
 }
 
 function applyOptions(saved) {
@@ -241,6 +243,7 @@ function syncOptionLabels() {
   $("pagesOut").textContent = o.splits && state.data ? state.data.n_pages : o.pages;
   $("zoomOut").textContent = o.zoom;
   $("radiusOut").textContent = o.waypoint_radius_m;
+  $("overlapOut").textContent = o.overlap_km;
   const prov = state.providers?.find((p) => p.id === o.provider);
   $("keyFields").hidden = !prov?.needs_key;
   if (prov?.needs_key) {
@@ -432,6 +435,12 @@ function updateNotes() {
   const zn = $("zoomNote");
   zn.textContent = `${ZOOM_FEEL[o.zoom] || ""} · ${d.tiles_total} tiles · ≈ ${ppi} ppi printed`;
   zn.className = "note" + (d.tiles_total > 600 ? " warn" : "");
+  // print scale per map page (1:N, rounded like a map's), see api.ground_scale
+  const nice = (n) => { const m = 10 ** Math.floor(Math.log10(n) - 1); return Math.round(n / m) * m; };
+  const scales = [...new Set(d.pages.map((p) => nice(p.scale)))];
+  $("scaleNote").textContent = scales.length === 1
+    ? `Map scale ≈ 1:${scales[0].toLocaleString("en")}`
+    : `Map scale ≈ 1:${Math.min(...scales).toLocaleString("en")} – 1:${Math.max(...scales).toLocaleString("en")}`;
 }
 
 function renderSummary() {
@@ -795,6 +804,19 @@ function drawPage(W, H) {
   }
 
   const t = d.track, idx = pageTrack(pg);
+  // neighbouring parts' track, dashed + faded as render_pages draws it
+  ctx.save();
+  ctx.setLineDash([pt(2 * state.style.track_width), pt(1.5 * state.style.track_width)]);
+  ctx.strokeStyle = "rgba(26,26,26,.45)"; ctx.lineWidth = pt(state.style.track_width); ctx.lineCap = "round";
+  for (const [a, z] of pg.overlap_km > 0 ? [[pg.d0 - pg.overlap_km, pg.d0], [pg.d1, pg.d1 + pg.overlap_km]] : []) {
+    ctx.beginPath();
+    let k = 0;
+    for (let i = 0; i < t.km.length; i++) if (t.km[i] >= a && t.km[i] <= z) {
+      const [x, y] = MP(t.lon[i], t.lat[i]); k++ ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
   drawGradeLine((i) => MP(t.lon[i], t.lat[i]), idx, pt(state.style.track_width), pt(state.style.track_width + 0.9));
 
   // markers + labels. Dragged labels (offsets in points, see labelKey) are

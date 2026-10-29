@@ -108,6 +108,8 @@ def process_one(gpx_path: Path, args, out_override: Path = None, progress=None) 
                                    workers=args.tile_workers, provider=args.provider,
                                    api_key=args.api_key, style_id=style_id, splits=splits,
                                    tile_cache=getattr(args, "tile_cache", True),
+                                   overlap_km=getattr(args, "overlap_km", fetch_basemap.OVERLAP_KM),
+                                   same_scale=getattr(args, "same_scale", False),
                                    on_page=lambda p, n: progress(2, f"Fetched basemap page {p}/{n}"))
 
     print(f"\n=== [3/4] Rendering {n_pages} page{'s' if n_pages != 1 else ''} ===")
@@ -182,6 +184,10 @@ def main():
     ap.add_argument("--maptiler-map-id", default=None, help="MapTiler map ID (default: topo-v4)")
     ap.add_argument("--waypoint-radius-m", type=float, default=60.0)
     ap.add_argument("--tile-workers", type=int, default=4)
+    ap.add_argument("--overlap-km", type=float, default=fetch_basemap.OVERLAP_KM,
+                     help="Track shown (faded) beyond each page's ends, in km (0 = none)")
+    ap.add_argument("--same-scale", action="store_true",
+                     help="Print every map page at the same scale (the largest page's)")
     ap.add_argument("--no-tile-cache", dest="tile_cache", action="store_false",
                      help="Download every basemap tile again instead of reusing work/tiles/")
     ap.add_argument("--race-title", default=None)

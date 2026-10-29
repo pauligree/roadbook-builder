@@ -263,6 +263,15 @@ def build_page(mode, page, ctx):
         for gy in np.arange(math.floor(ymin / dlat) * dlat, ymax, dlat):
             ax_m.axhline(gy, color="white", linewidth=0.5, alpha=0.5, zorder=1)
 
+        # neighbouring parts' track (fetch_basemap.page_bboxes made room
+        # for it), faded + dashed so it can't be mistaken for this part's
+        ov = bb.get("overlap_km", 0.0)
+        for a, b in ((d0 - ov, d0), (d1, d1 + ov)) if ov > 0 else ():
+            m = (dist_km >= a) & (dist_km <= b)
+            if m.sum() > 1:
+                ax_m.plot(lons[m], lats[m], color="#1a1a1a", linewidth=style["track_width"], alpha=0.45,
+                          linestyle=(0, (2, 1.5)), dash_capstyle="round", zorder=1.9)
+
         ax_m.plot(seg_lon, seg_lat, color="#1a1a1a", linewidth=style["track_width"] + 0.9, solid_capstyle="round",
                   solid_joinstyle="round", zorder=2)
 

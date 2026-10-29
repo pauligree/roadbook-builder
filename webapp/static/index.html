@@ -97,6 +97,17 @@
           </label>
         </div>
 
+        <label class="field">
+          <span>Overlap with next/previous part <output id="overlapOut">0.5</output> km</span>
+          <input name="overlap_km" type="range" min="0" max="2" step="0.25" value="0.5">
+          <small class="note">Neighbouring track shown dashed on each map</small>
+        </label>
+        <label class="field check">
+          <input name="same_scale" type="checkbox">
+          <span>Same map scale on every page</span>
+        </label>
+        <small id="scaleNote" class="note scale-note"></small>
+
         <label class="field check">
           <input name="part_tables" type="checkbox" checked>
           <span>Waypoint table after each map</span>

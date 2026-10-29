@@ -201,6 +201,7 @@ input[type=range]:disabled{opacity:.4}
 
 .field.check { display: flex; align-items: center; gap: 8px; }
 .field.check > span { margin: 0; font-weight: 500; }
+.scale-note { margin: -8px 0 14px; }
 
 /* race presets: select + name/save/delete row */
 .presets { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
