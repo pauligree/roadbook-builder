@@ -66,8 +66,9 @@ Priority order:
    (`--overlap-km`).
 2. ✅ **Fixed print scale** option (1:25k / 1:50k) + scale label; page count
    derived automatically (`--print-scale N`, `fetch_basemap.scale_edges`).
-3. **Better label collision avoidance** — more candidate positions, leader
-   lines when crowded.
+3. ✅ **Better label collision avoidance** — more candidate positions, leader
+   lines when crowded. Cost-based placement (labels, markers, map furniture,
+   track, leader crossings) for start/end and POI labels; preview mirrors it.
 4. **Basemap tuning** — optional desaturate/lighten so track pops, hillshade.
 5. **Gradient legend + binned colours** (0–5 / 5–10 / 10–20 / 20 %+),
    readable in print and B&W.

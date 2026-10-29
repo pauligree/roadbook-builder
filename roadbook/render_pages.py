@@ -44,6 +44,7 @@ import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.text import Text
 from matplotlib.transforms import Bbox
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from PIL import Image
@@ -71,6 +72,12 @@ CMAP = LinearSegmentedColormap.from_list("blue_purple_red_grade", GRADIENT_COLOR
 # which breaks the "editable PDF" requirement this whole pipeline exists
 # for. A bbox background patch achieves the same "readable over anything"
 # effect while leaving the glyphs themselves as real text.
+# label placement costs, see build_page (mirrored in webapp/static/app.js)
+LABEL_VSTEPS = [10, 24, 38, 54, 70, -10, -24, -38, -54, -70]  # pt above (+) / below (-) the point
+LABEL_TRACK_COST = 25.0  # per covered track sample, ~ px² of label overlap
+LABEL_DIST_COST = 2.0    # per px of offset from the point
+LABEL_CROSS_COST = 600.0  # per leader crossing another leader, or running through a label
+
 LABEL_BG = dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.75)
 LABEL_BG_DARK = dict(boxstyle="round,pad=0.12", facecolor="black", edgecolor="none", alpha=0.55)
 
@@ -289,44 +296,66 @@ def build_page(mode, page, ctx):
 
         ax_m.scatter([seg_lon[0]], [seg_lat[0]], marker="o", s=70, facecolor="#1b8a3a",
                      edgecolor="white", linewidth=1.2, zorder=6)
-        def text_pos(key, default_xytext, ha="left", va="baseline"):
-            """annotate() placement: the dragged offset if there is one, else the default."""
-            off = offsets.get(key)
-            if off:
-                return dict(xytext=(off[0], -off[1]), ha="left", va="top")
-            return dict(xytext=default_xytext, ha=ha, va=va)
-
-        ann_start = ax_m.annotate(start_label, (seg_lon[0], seg_lat[0]), textcoords="offset points",
-                                   **text_pos(label_key("map", pnum, "start"), (8, 10)), **font_kw,
-                                   fontsize=8.5, fontweight="bold", color="#1b8a3a", zorder=8,
-                                   bbox=LABEL_BG)
-
         ax_m.scatter([seg_lon[-1]], [seg_lat[-1]], marker="o", s=70, facecolor="#c0392b",
                      edgecolor="white", linewidth=1.2, zorder=6)
-        ann_end = ax_m.annotate(end_label, (seg_lon[-1], seg_lat[-1]), textcoords="offset points",
-                                 **text_pos(label_key("map", pnum, "end"), (8, 10)), **font_kw,
-                                 fontsize=8.5, fontweight="bold", color="#c0392b", zorder=8,
-                                 bbox=LABEL_BG)
+        for (_km, _name, plat, plon, _pele) in page_pois:
+            ax_m.scatter([plon], [plat], marker="o", s=32, facecolor="#c0392b", edgecolor="white",
+                         linewidth=1.0, zorder=7)
 
-        # ---- POI labels: collision-aware placement -----------------------
-        # The old approach cycled through a fixed set of vertical offsets
-        # blindly, with no idea whether a label actually landed on top of
-        # another label, a marker, or the map edge — POIs bunched close
-        # together along the track routinely ended up with overlapping or
-        # clipped labels. This instead measures each candidate label's real
-        # rendered bounding box (via a live renderer, now that the axes'
-        # final aspect-corrected transform is already locked in above) and
-        # walks a ring of offsets — alternating left/right of the point,
-        # stepping further away vertically — looking for one that clears
-        # every marker and every label placed so far. When two+ POIs sit
-        # close enough together that no offset avoids overlap entirely
-        # (e.g. a cluster of named junctions within a couple hundred
-        # metres), it keeps whichever candidate has the least total overlap
-        # rather than blindly taking the first one tried.
-        mid_x = (xmin + xmax) / 2
+        # ---- map furniture, drawn before the labels so they can avoid it --
+        # longest round length up to ~40 % of the map width (5 km on a
+        # 15-20 km wide map, 1 km at 1:25k where the map is ~5 km wide)
+        width_km = (xmax - xmin) * km_per_deg_lon
+        sb_len = max([l for l in (0.5, 1, 2, 5, 10, 20, 50) if l <= width_km * 0.4] or [0.5])
+        sb_len_deg = sb_len / km_per_deg_lon
+        sb_x0 = xmax - sb_len_deg - (xmax - xmin) * 0.06
+        sb_y0 = ymin + (ymax - ymin) * 0.05
+        furniture_artists = []  # obstacles for the label placement below
+        furniture_artists += ax_m.plot([sb_x0, sb_x0 + sb_len_deg], [sb_y0, sb_y0], color="black", linewidth=2.4, zorder=9,
+                                       path_effects=[pe.Stroke(linewidth=3.6, foreground="white"), pe.Normal()])
+        ax_m.plot([sb_x0, sb_x0], [sb_y0 - (ymax - ymin) * 0.01, sb_y0 + (ymax - ymin) * 0.01], color="black", linewidth=2.4, zorder=9)
+        ax_m.plot([sb_x0 + sb_len_deg, sb_x0 + sb_len_deg], [sb_y0 - (ymax - ymin) * 0.01, sb_y0 + (ymax - ymin) * 0.01], color="black", linewidth=2.4, zorder=9)
+        print_scale = bb.get("print_scale")
+        sb_text = f"{sb_len:g} km" + (f"  ·  1:{print_scale:,}" if print_scale else "")
+        furniture_artists.append(ax_m.text(sb_x0 + sb_len_deg / 2, sb_y0 + (ymax - ymin) * 0.018, sb_text,
+                                           ha="center", fontsize=8.5, bbox=LABEL_BG, zorder=9))
+
+        nx0, ny0 = xmin + (xmax - xmin) * 0.05, ymax - (ymax - ymin) * 0.12
+        furniture_artists.append(ax_m.annotate("N", xy=(nx0, ny0 + (ymax - ymin) * 0.05), xytext=(nx0, ny0),
+                      ha="center", fontsize=10.5, fontweight="bold", color="black",
+                      bbox=LABEL_BG,
+                      arrowprops=dict(arrowstyle="-|>", color="black", linewidth=1.8)))
+
+        furniture_artists.append(ax_m.text(0.01, 0.01, ctx["attribution"],
+                                           transform=ax_m.transAxes, fontsize=6.5, color="white", va="bottom",
+                                           ha="left", bbox=LABEL_BG_DARK))
+
+        cax = inset_axes(ax_m, width="1.8%", height="28%", loc="upper right",
+                          bbox_to_anchor=(-0.012, -0.02, 1, 1), bbox_transform=ax_m.transAxes, borderpad=0)
+        cbar = fig.colorbar(lc, cax=cax)
+        cbar.set_label("grade (%)", fontsize=7.5, color="white")
+        cbar.ax.tick_params(labelsize=6.5, colors="white")
+        cbar.outline.set_edgecolor("white")
+
+        # ---- labels: collision-aware placement ---------------------------
+        # Each label (start/end and every POI) tries a ring of offsets around
+        # its point — either side, two distances out, stepping further away
+        # vertically — and takes the one with the lowest cost:
+        #   overlap area with labels placed so far, markers and map furniture
+        #   (scale bar, north arrow, attribution, colour bar)
+        #   + LABEL_TRACK_COST per track sample (~3 px apart) it covers
+        #   + LABEL_DIST_COST per px of offset (nearer is better)
+        #   + LABEL_CROSS_COST per crossing with a leader line placed so far,
+        #     and per leader running through a label (this one's or another's)
+        #   + a huge penalty for leaving the map panel.
+        # A label is measured once per alignment; candidates are scored by
+        # translating that box, so no annotation is created per candidate.
+        # Dragged labels go first and are fixed obstacles for the rest.
+        # webapp/static/app.js mirrors this (placeLabels) for the preview.
         fig.canvas.draw()
         renderer = fig.canvas.get_renderer()
         map_disp_bbox = ax_m.get_window_extent(renderer=renderer)
+        px_per_pt = fig.dpi / 72
 
         marker_r_px = 8  # keep labels clear of marker glyphs, not just each other
 
@@ -340,108 +369,111 @@ def build_page(mode, page, ctx):
             dy = min(b1.y1, b2.y1) - max(b1.y0, b2.y0)
             return max(dx, 0.0) * max(dy, 0.0)
 
-        obstacle_boxes = [
-            marker_obstacle(seg_lon[0], seg_lat[0]),
-            marker_obstacle(seg_lon[-1], seg_lat[-1]),
-            ann_start.get_window_extent(renderer=renderer),
-            ann_end.get_window_extent(renderer=renderer),
-        ]
-        for (_km, _name, plat, plon, _pele) in page_pois:
-            obstacle_boxes.append(marker_obstacle(plon, plat))
+        track_px = ax_m.transData.transform(np.column_stack([seg_lon, seg_lat]))
+        step_px = np.r_[0.0, np.cumsum(np.hypot(*np.diff(track_px, axis=0).T))]
+        _, keep = np.unique(np.floor(step_px / 3.0), return_index=True)
+        track_x, track_y = track_px[keep].T
 
-        vsteps = [10, 24, 38, 54, 70, -10, -24, -38, -54, -70]
-        off_panel_penalty = 1e7  # dwarfs any real overlap area, but finite so "least-bad" logic still orders correctly
+        obstacle_boxes = [marker_obstacle(seg_lon[0], seg_lat[0]), marker_obstacle(seg_lon[-1], seg_lat[-1])]
+        obstacle_boxes += [marker_obstacle(plon, plat) for (_k, _n, plat, plon, _e) in page_pois]
+        obstacle_boxes += [a.get_window_extent(renderer=renderer) for a in furniture_artists]
+        obstacle_boxes.append(cax.get_tightbbox(renderer))
 
-        def place_poi_label(label, ha, dx, dy, va="baseline"):
-            return ax_m.annotate(
-                label, (px, py), xytext=(dx, dy), textcoords="offset points",
-                fontsize=8, color="#1a1a2e", ha=ha, va=va, zorder=8, **font_kw,
-                bbox=LABEL_BG,
-                arrowprops=dict(arrowstyle="-", color="#333333", linewidth=0.5,
-                                 connectionstyle="arc3,rad=0.0", shrinkA=0, shrinkB=0),
-            )
+        leaders = []      # (anchor px, label attach px) of labels placed so far
+        label_boxes = []  # their boxes (leaders must not run through these)
 
-        # Dragged labels go first, so the automatic search below treats
-        # them as fixed obstacles instead of landing on top of them.
-        auto_pois = []
-        for (km, name, plat, plon, pele) in page_pois:
-            px, py = plon, plat
-            ax_m.scatter([px], [py], marker="o", s=32, facecolor="#c0392b", edgecolor="white",
-                         linewidth=1.0, zorder=7)
-            label = f"{name}\n{km:.1f} km - {pele:.0f} m"
-            off = offsets.get(label_key("map", pnum, km))
-            if off:
-                ann = place_poi_label(label, "left", off[0], -off[1], va="top")
-                obstacle_boxes.append(ann.get_window_extent(renderer=renderer))
-            else:
-                auto_pois.append((km, name, plat, plon, pele))
+        def attach(box, a):
+            """Point of `box` nearest to `a` — where the leader line meets the label."""
+            return (min(max(a[0], box.x0), box.x1), min(max(a[1], box.y0), box.y1))
 
-        for (km, name, plat, plon, pele) in auto_pois:
-            px, py = plon, plat
-            label = f"{name}\n{km:.1f} km - {pele:.0f} m"
+        def crosses(p1, p2, q1, q2):
+            def orient(a, b, c):
+                return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+            return (orient(p1, p2, q1) * orient(p1, p2, q2) < 0 and
+                    orient(q1, q2, p1) * orient(q1, q2, p2) < 0)
 
-            sides = ["right", "left"] if px <= mid_x else ["left", "right"]
-            chosen = None
-            best = None  # (penalty, ann, box) — least-bad candidate, kept only if nothing is fully clear
+        def through(a, b, box):
+            """Does segment a-b pass through `box` (shrunk 1 px, so a leader
+            ending on its own label's edge doesn't count)? Sampled."""
+            t = np.linspace(0.05, 0.95, 12)
+            x, y = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+            return bool(np.any((x > box.x0 + 1) & (x < box.x1 - 1) & (y > box.y0 + 1) & (y < box.y1 - 1)))
+
+        def cost(box, dist_px, anchor):
+            c = sum(overlap_area(box, ob) for ob in obstacle_boxes)
+            tip = attach(box, anchor)
+            c += LABEL_CROSS_COST * sum(crosses(anchor, tip, a, b) for a, b in leaders)
+            c += LABEL_CROSS_COST * sum(through(anchor, tip, lb) for lb in label_boxes)
+            c += LABEL_CROSS_COST * sum(through(a, b, box) for a, b in leaders)
+            c += LABEL_TRACK_COST * np.count_nonzero((track_x >= box.x0) & (track_x <= box.x1) &
+                                                     (track_y >= box.y0) & (track_y <= box.y1))
+            c += LABEL_DIST_COST * dist_px
+            if not (box.x0 >= map_disp_bbox.x0 and box.x1 <= map_disp_bbox.x1 and
+                    box.y0 >= map_disp_bbox.y0 and box.y1 <= map_disp_bbox.y1):
+                c += 1e7  # dwarfs any real cost, but finite so the least-bad one still wins
+            return c
+
+        def candidates(x_px, dxs):
+            sides = (1, -1) if x_px <= map_disp_bbox.x0 + map_disp_bbox.width / 2 else (-1, 1)
             for side in sides:
-                dx, ha = (12, "left") if side == "right" else (-12, "right")
-                for dy in vsteps:
-                    ann = place_poi_label(label, ha, dx, dy)
-                    box = ann.get_window_extent(renderer=renderer)
-                    fits_panel = (box.x0 >= map_disp_bbox.x0 and box.x1 <= map_disp_bbox.x1 and
-                                  box.y0 >= map_disp_bbox.y0 and box.y1 <= map_disp_bbox.y1)
-                    penalty = sum(overlap_area(box, ob) for ob in obstacle_boxes)
-                    if not fits_panel:
-                        penalty += off_panel_penalty
-                    if penalty == 0.0:
-                        if best is not None:
-                            best[1].remove()  # drop the earlier least-bad candidate
-                        chosen = (ann, box)
-                        break
-                    if best is None or penalty < best[0]:
-                        if best is not None:
-                            best[1].remove()
-                        best = (penalty, ann, box)
-                    else:
-                        ann.remove()
-                if chosen:
-                    break
-            if chosen is None:
-                chosen = (best[1], best[2])
-            obstacle_boxes.append(chosen[1])
+                for dx in dxs:
+                    for dy in LABEL_VSTEPS:
+                        yield side * dx, dy, "left" if side > 0 else "right"
 
-        # longest round length up to ~40 % of the map width (5 km on a
-        # 15-20 km wide map, 1 km at 1:25k where the map is ~5 km wide)
-        width_km = (xmax - xmin) * km_per_deg_lon
-        sb_len = max([l for l in (0.5, 1, 2, 5, 10, 20, 50) if l <= width_km * 0.4] or [0.5])
-        sb_len_deg = sb_len / km_per_deg_lon
-        sb_x0 = xmax - sb_len_deg - (xmax - xmin) * 0.06
-        sb_y0 = ymin + (ymax - ymin) * 0.05
-        ax_m.plot([sb_x0, sb_x0 + sb_len_deg], [sb_y0, sb_y0], color="black", linewidth=2.4, zorder=9,
-                  path_effects=[pe.Stroke(linewidth=3.6, foreground="white"), pe.Normal()])
-        ax_m.plot([sb_x0, sb_x0], [sb_y0 - (ymax - ymin) * 0.01, sb_y0 + (ymax - ymin) * 0.01], color="black", linewidth=2.4, zorder=9)
-        ax_m.plot([sb_x0 + sb_len_deg, sb_x0 + sb_len_deg], [sb_y0 - (ymax - ymin) * 0.01, sb_y0 + (ymax - ymin) * 0.01], color="black", linewidth=2.4, zorder=9)
-        print_scale = bb.get("print_scale")
-        sb_text = f"{sb_len:g} km" + (f"  ·  1:{print_scale:,}" if print_scale else "")
-        ax_m.text(sb_x0 + sb_len_deg / 2, sb_y0 + (ymax - ymin) * 0.018, sb_text, ha="center", fontsize=8.5,
-                  bbox=LABEL_BG, zorder=9)
+        def place_label(text, xy, dxs, text_kw, leader_color):
+            """Annotate `text` at the cheapest candidate offset; returns its box."""
+            anchor = tuple(ax_m.transData.transform(xy))
+            x_px = anchor[0]
+            measured, best = {}, None
+            for dx, dy, ha in candidates(x_px, dxs):
+                if ha not in measured:
+                    probe = ax_m.annotate(text, xy, xytext=(0, 0), textcoords="offset points",
+                                          ha=ha, va="baseline", bbox=LABEL_BG, **text_kw)
+                    # + the white background's padding (LABEL_BG pad x font size)
+                    pad = 0.15 * probe.get_fontsize() * px_per_pt
+                    measured[ha] = probe.get_window_extent(renderer=renderer).padded(pad)
+                    probe.remove()
+                box = measured[ha].translated(dx * px_per_pt, dy * px_per_pt)
+                c = cost(box, math.hypot(dx, dy) * px_per_pt, anchor)
+                if best is None or c < best[0]:
+                    best = (c, dx, dy, ha, box)
+            _c, dx, dy, ha, box = best
+            ax_m.annotate(text, xy, xytext=(dx, dy), textcoords="offset points", ha=ha, va="baseline",
+                          bbox=LABEL_BG, **text_kw,
+                          arrowprops=dict(arrowstyle="-", color=leader_color, linewidth=0.5,
+                                          shrinkA=0, shrinkB=0))
+            leaders.append((anchor, attach(box, anchor)))
+            label_boxes.append(box)
+            return box
 
-        nx0, ny0 = xmin + (xmax - xmin) * 0.05, ymax - (ymax - ymin) * 0.12
-        ax_m.annotate("N", xy=(nx0, ny0 + (ymax - ymin) * 0.05), xytext=(nx0, ny0),
-                      ha="center", fontsize=10.5, fontweight="bold", color="black",
-                      bbox=LABEL_BG,
-                      arrowprops=dict(arrowstyle="-|>", color="black", linewidth=1.8))
+        def place_dragged(text, xy, off, text_kw, leader_color):
+            ann = ax_m.annotate(text, xy, xytext=(off[0], -off[1]), textcoords="offset points",
+                                ha="left", va="top", bbox=LABEL_BG, **text_kw,
+                                arrowprops=dict(arrowstyle="-", color=leader_color, linewidth=0.5,
+                                                shrinkA=0, shrinkB=0) if leader_color else None)
+            box = Text.get_window_extent(ann, renderer).padded(0.15 * ann.get_fontsize() * px_per_pt)
+            anchor = tuple(ax_m.transData.transform(xy))
+            leaders.append((anchor, attach(box, anchor)))
+            label_boxes.append(box)
+            return box  # text box only, not the leader
 
-        ax_m.text(0.01, 0.01, ctx["attribution"],
-                  transform=ax_m.transAxes, fontsize=6.5, color="white", va="bottom", ha="left",
-                  bbox=LABEL_BG_DARK)
-
-        cax = inset_axes(ax_m, width="1.8%", height="28%", loc="upper right",
-                          bbox_to_anchor=(-0.012, -0.02, 1, 1), bbox_transform=ax_m.transAxes, borderpad=0)
-        cbar = fig.colorbar(lc, cax=cax)
-        cbar.set_label("grade (%)", fontsize=7.5, color="white")
-        cbar.ax.tick_params(labelsize=6.5, colors="white")
-        cbar.outline.set_edgecolor("white")
+        end_kw = dict(fontsize=8.5, fontweight="bold", zorder=8, **font_kw)
+        labels = [  # key, text, anchor, candidate dx (pt), text kwargs, leader colour
+            (label_key("map", pnum, "start"), start_label, (seg_lon[0], seg_lat[0]), (8, 24),
+             dict(end_kw, color="#1b8a3a"), "#1b8a3a"),
+            (label_key("map", pnum, "end"), end_label, (seg_lon[-1], seg_lat[-1]), (8, 24),
+             dict(end_kw, color="#c0392b"), "#c0392b"),
+        ] + [
+            (label_key("map", pnum, km), f"{name}\n{km:.1f} km - {pele:.0f} m", (plon, plat), (12, 30),
+             dict(fontsize=8, color="#1a1a2e", zorder=8, **font_kw), "#333333")
+            for (km, name, plat, plon, pele) in page_pois
+        ]
+        for key, text, xy, _dxs, text_kw, leader in labels:
+            if offsets.get(key):
+                obstacle_boxes.append(place_dragged(text, xy, offsets[key], text_kw, leader))
+        for key, text, xy, dxs, text_kw, leader in labels:
+            if not offsets.get(key):
+                obstacle_boxes.append(place_label(text, xy, dxs, text_kw, leader))
 
     ax_m.set_xticks([]); ax_m.set_yticks([])
     if is_vector:

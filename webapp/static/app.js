@@ -651,8 +651,6 @@ function label(text, x, y, { size = 11, color = "#1a1a2e", bold = false, align =
   return { x0: x0 - 2, y0: y - 1, x1: x0 + w + 2, y1: y + h + 1 };
 }
 
-const overlaps = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
-
 // ---- drawing ------------------------------------------------------------
 function resizeCanvas() {
   const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
@@ -738,6 +736,77 @@ function outlineIfActive(key, r) {
   ctx.strokeStyle = COLORS().accent; ctx.lineWidth = active ? 1.5 : 1; ctx.setLineDash(active ? [] : [3, 2]);
   ctx.strokeRect(r.x0 - 1, r.y0 - 1, r.x1 - r.x0 + 2, r.y1 - r.y0 + 2);
   ctx.restore();
+}
+
+// ---- map label placement (mirrors render_pages.build_page) --------------
+// Same candidate ring and costs as the PDF; see the comment block there.
+const LABEL_VSTEPS = [10, 24, 38, 54, 70, -10, -24, -38, -54, -70];
+const LABEL_TRACK_COST = 25, LABEL_DIST_COST = 2, LABEL_CROSS_COST = 600;
+
+// scale bar length, as render_pages: longest round length up to ~40 % of the width
+const scaleBarKm = (b, kmLon) => Math.max(...[0.5, 1, 2, 5, 10, 20, 50].filter((l) => l <= (b.east - b.west) * kmLon * 0.4), 0.5);
+
+// Rects of the scale bar, north arrow, colour bar and attribution, as drawn in drawPage.
+function mapFurniture(b, mx, my, mw, mh, kmLon, pt) {
+  const d = state.data;
+  ctx.font = `${pt(8.5)}px -apple-system, Helvetica, sans-serif`;
+  const sbW = scaleBarKm(b, kmLon) / kmLon / (b.east - b.west) * mw, sbx = mx + mw * 0.94 - sbW, sby = my + mh * 0.95;
+  const sbText = ctx.measureText(`${scaleBarKm(b, kmLon)} km${d.print_scale ? `  ·  1:${d.print_scale.toLocaleString("en")}` : ""}`).width;
+  const sbMid = sbx + sbW / 2, sbHalf = Math.max(sbW, sbText + 4) / 2;
+  const nx = mx + mw * 0.05, ny = my + mh * 0.07;
+  const cbx = mx + mw * (1 - 0.012 - 0.018), cby = my + mh * 0.02, cbh = mh * 0.28;
+  ctx.font = `${pt(6.5)}px -apple-system, Helvetica, sans-serif`;
+  const attrW = ctx.measureText(d.attribution).width + 4;
+  return [
+    { x0: sbMid - sbHalf, y0: sby - pt(18), x1: sbMid + sbHalf, y1: sby + pt(3) },
+    { x0: nx - pt(7), y0: ny - pt(15), x1: nx + pt(7), y1: ny + pt(13) },
+    { x0: cbx - pt(24), y0: cby, x1: cbx + mw * 0.018, y1: cby + cbh },
+    { x0: mx + mw * 0.01, y0: my + mh * 0.99 - pt(10), x1: mx + mw * 0.01 + attrW, y1: my + mh * 0.99 },
+  ];
+}
+
+// track points thinned to >= `gap` px apart (render_pages samples every ~3 px at 100 dpi)
+function thinTrack(pts, gap) {
+  const out = [];
+  for (const q of pts) {
+    const last = out[out.length - 1];
+    if (!last || Math.hypot(q[0] - last[0], q[1] - last[1]) >= gap) out.push(q);
+  }
+  return out;
+}
+
+function placeLabels(items, { mx, my, mw, mh, leaders, attach, putLabel, measure, placed, pt, obstacles, track, u }) {
+  const area = (a, b) => Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) *
+    Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const orient = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const crosses = (p1, p2, q1, q2) => orient(p1, p2, q1) * orient(p1, p2, q2) < 0 && orient(q1, q2, p1) * orient(q1, q2, p2) < 0;
+  const through = (a, b, r) => {  // sampled, label rect shrunk 1 px
+    for (let k = 0; k < 12; k++) {
+      const t = 0.05 + 0.9 * k / 11, x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t;
+      if (x > r.x0 + 1 && x < r.x1 - 1 && y > r.y0 + 1 && y < r.y1 - 1) return true;
+    }
+    return false;
+  };
+  const midX = mx + mw / 2;
+  for (const it of items) {
+    const { w, h } = measure(it.text, it.opts.size, it.opts.bold), a = [it.ax, it.ay];
+    let best = null;
+    for (const side of it.ax <= midX ? [1, -1] : [-1, 1]) for (const dx of it.dxs) for (const dy of LABEL_VSTEPS) {
+      // va="baseline" in matplotlib: the point sits on the last line's
+      // baseline, descenders (~0.34 em) hang below it
+      const lx = side > 0 ? it.ax + pt(dx) : it.ax - pt(dx) - w, ly = it.ay - pt(dy) + 0.34 * it.opts.size - h;
+      const r = { x0: lx, y0: ly, x1: lx + w, y1: ly + h }, tip = attach(r, it.ax, it.ay);
+      let c = LABEL_DIST_COST * Math.hypot(pt(dx), pt(dy)) * u;
+      for (const q of placed) c += area(q, r) * u * u + LABEL_CROSS_COST * through(a, tip, q);
+      for (const q of obstacles) c += area(q, r) * u * u;
+      for (const [x, y] of track) if (x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1) c += LABEL_TRACK_COST;
+      for (const [p, q] of leaders) c += LABEL_CROSS_COST * (crosses(a, tip, p, q) + through(p, q, r));
+      if (r.x0 < mx || r.x1 > mx + mw || r.y0 < my || r.y1 > my + mh) c += 1e7;
+      if (!best || c < best.c) best = { c, r };
+    }
+    const r = putLabel(it.key, it.text, it.ax, it.ay, best.r.x0 + 2, best.r.y0 + 1, it.opts, it.leader);
+    leaders.push([a, attach(r, it.ax, it.ay)]);
+  }
 }
 
 function drawPage(W, H) {
@@ -856,6 +925,7 @@ function drawPage(W, H) {
       label(text, tx, ty, { ...opts, font: LF });
       outlineIfActive(key, r);
     });
+    return r;
   };
   const fromOffset = (key, ax, ay) => offs[key] && [ax + offs[key][0] * ptpx, ay + offs[key][1] * ptpx];
 
@@ -869,41 +939,37 @@ function drawPage(W, H) {
 
   const items = [
     { key: labelKey("map", pnum, "start"), ax: sx0, ay: sy0, text: isStart ? "START" : `${pg.d0.toFixed(1)} km\n(from part ${pnum - 1})`,
-      opts: { size: pt(8.5), bold: true, color: "#1b8a3a" }, fixed: [sx0 + pt(8), sy0 - pt(18)] },
+      opts: { size: pt(8.5), bold: true, color: "#1b8a3a" }, dxs: [8, 24], leader: "#1b8a3a" },
     { key: labelKey("map", pnum, "end"), ax: ex0, ay: ey0, text: isEnd ? "FINISH" : `${pg.d1.toFixed(1)} km\n(continues part ${pnum + 1})`,
-      opts: { size: pt(8.5), bold: true, color: "#c0392b" }, fixed: [ex0 + pt(8), ey0 - pt(18)] },
+      opts: { size: pt(8.5), bold: true, color: "#c0392b" }, dxs: [8, 24], leader: "#c0392b" },
     ...pois.map((p) => {
       const [x, y] = MP(p.lon, p.lat);
       return { key: labelKey("map", pnum, p.km), ax: x, ay: y, text: `${p.name}\n${p.km.toFixed(1)} km - ${Math.round(p.ele)} m`,
-               opts: { size: pt(8) }, leader: "#333" };
+               opts: { size: pt(8) }, dxs: [12, 30], leader: "#333" };
     }),
   ];
+  const leaders = [];  // [anchor, attach] of labels placed so far
+  const attach = (r, x, y) => [Math.min(Math.max(x, r.x0), r.x1), Math.min(Math.max(y, r.y0), r.y1)];
   for (const it of items) {
     const at = fromOffset(it.key, it.ax, it.ay);
-    if (at) putLabel(it.key, it.text, it.ax, it.ay, at[0], at[1], it.opts, it.leader || null);  // start/finish: no leader, as in the PDF
+    if (!at) continue;
+    const r = putLabel(it.key, it.text, it.ax, it.ay, at[0], at[1], it.opts, it.leader);
+    leaders.push([[it.ax, it.ay], attach(r, it.ax, it.ay)]);
   }
-  const midX = mx + mw / 2;
-  for (const it of items.filter((it) => !offs[it.key])) {
-    if (it.fixed) { putLabel(it.key, it.text, it.ax, it.ay, it.fixed[0], it.fixed[1], it.opts, null); continue; }
-    const { w, h } = measure(it.text, it.opts.size);
-    let best = null;
-    for (const side of it.ax <= midX ? [1, -1] : [-1, 1]) {
-      for (const dy of [10, 24, 38, 54, 70, -10, -24, -38, -54, -70]) {
-        const lx = side > 0 ? it.ax + pt(12) : it.ax - pt(12) - w, ly = it.ay - pt(dy) - h / 2;
-        const r = { x0: lx, y0: ly, x1: lx + w, y1: ly + h };
-        const off = r.x0 < mx || r.x1 > mx + mw || r.y0 < my || r.y1 > my + mh;
-        const hits = placed.filter((q) => overlaps(q, r)).length + (off ? 100 : 0);
-        if (!best || hits < best.hits) best = { r, hits };
-        if (hits === 0) break;
-      }
-      if (best.hits === 0) break;
-    }
-    putLabel(it.key, it.text, it.ax, it.ay, best.r.x0 + 2, best.r.y0 + 1, it.opts, it.leader);
-  }
+  placeLabels(items.filter((it) => !offs[it.key]), {
+    mx, my, mw, mh, leaders, attach, putLabel, measure, placed, pt,
+    // obstacles besides placed labels: markers and the map furniture drawn below
+    obstacles: [
+      ...[[sx0, sy0], [ex0, ey0], ...pois.map((p) => MP(p.lon, p.lat))]
+        .map(([x, y]) => ({ x0: x - pt(5.8), y0: y - pt(5.8), x1: x + pt(5.8), y1: y + pt(5.8) })),
+      ...mapFurniture(b, mx, my, mw, mh, kmLon, pt),
+    ],
+    track: thinTrack(idx.map((i) => MP(t.lon[i], t.lat[i])), pt(2.16)),
+    u: 100 / 72 / ptpx,  // canvas px -> render_pages px (100 dpi), so the costs match
+  });
 
   // scale bar, north arrow, colorbar, attribution
-  // same rule as render_pages: longest round length up to ~40 % of the width
-  const sbKm = Math.max(...[0.5, 1, 2, 5, 10, 20, 50].filter((l) => l <= (b.east - b.west) * kmLon * 0.4), 0.5);
+  const sbKm = scaleBarKm(b, kmLon);
   const sbW = sbKm / kmLon / (b.east - b.west) * mw;
   const sbx = mx + mw * 0.94 - sbW, sby = my + mh * 0.95;
   ctx.strokeStyle = "#fff"; ctx.lineWidth = pt(3.6); ctx.beginPath(); ctx.moveTo(sbx, sby); ctx.lineTo(sbx + sbW, sby); ctx.stroke();
