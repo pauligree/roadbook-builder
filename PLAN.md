@@ -48,7 +48,7 @@ render service in Phase 2 option A.
 - [x] Page split: equal distance, or custom — end pages at chosen GPX waypoints
 - [x] Style panel: label font, track/profile line width, editable colour scale
       (presets + custom stops + range), draggable map/profile labels → PDF
-- [ ] Presets per race (save/load option sets)
+- [x] Presets per race (save/load option sets) — server-side `presets/<name>.json`, no API keys
 - [ ] Batch render + "merge all" from UI
 
 ## Phase 1b — Mac app

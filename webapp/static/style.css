@@ -201,3 +201,14 @@ input[type=range]:disabled{opacity:.4}
 
 .field.check { display: flex; align-items: center; gap: 8px; }
 .field.check > span { margin: 0; font-weight: 500; }
+
+/* race presets: select + name/save/delete row */
+.presets { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.presets select, .presets input[type=text] {
+  width: 100%; padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit;
+}
+.presets .btn-row input { flex: 3; min-width: 0; }
+.presets .btn-row .ghost { flex: none; }
+.ghost.armed { border-color: var(--err); background: var(--err); color: #fff; font-weight: 600; }
+.ghost:disabled { opacity: .45; cursor: default; border-color: var(--line); color: var(--ink); }

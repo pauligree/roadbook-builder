@@ -47,6 +47,17 @@
     <!-- RIGHT: options -->
     <aside class="pane options">
       <div class="pane-title">Options</div>
+      <!-- outside the form: not an option itself, it loads/saves the form -->
+      <div class="field presets">
+        <span>Race preset</span>
+        <select id="presetSel" aria-label="Race preset"></select>
+        <div class="btn-row">
+          <input id="presetName" type="text" placeholder="preset name, e.g. TORX 2026" maxlength="80" autocomplete="off">
+          <button type="button" id="presetSave" class="ghost">Save</button>
+          <button type="button" id="presetDel" class="ghost" disabled>Delete</button>
+        </div>
+        <small id="presetNote" class="note"></small>
+      </div>
       <form id="opts" autocomplete="off">
         <label class="field">
           <span>Pages <output id="pagesOut">4</output></span>

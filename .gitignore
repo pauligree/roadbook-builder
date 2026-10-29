@@ -19,3 +19,6 @@ config.local.json
 !config.local.example.json
 *.pem
 *.key
+
+# Per-race option presets saved from the web app
+presets/

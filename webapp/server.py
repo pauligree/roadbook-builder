@@ -15,7 +15,12 @@ Endpoints:
     GET  /output/{name}          serve a finished PDF
     DELETE /api/files?path=...   move a GPX to the Trash
     DELETE /api/output/{name}    move a finished PDF to the Trash
+    GET  /api/presets            saved per-race option sets (names)
+    GET  /api/presets/{name}     one preset's options
+    PUT  /api/presets/{name}     save options as a preset (overwrites)
+    DELETE /api/presets/{name}   move a preset to the Trash
 """
+import json
 import re
 import shutil
 import threading
@@ -37,6 +42,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 OUTPUT_DIR = PROJECT_ROOT / "output"
 UPLOAD_DIR = PROJECT_ROOT / "input"
 SOURCE_DIRS = [PROJECT_ROOT / "input", PROJECT_ROOT / "input-TORX"]
+PRESET_DIR = PROJECT_ROOT / "presets"
 
 app = FastAPI(title="Roadbook Builder")
 
@@ -58,6 +64,16 @@ def output_file(name: str) -> Path:
     p = (OUTPUT_DIR / name).resolve()
     if p.parent != OUTPUT_DIR.resolve() or p.suffix != ".pdf" or not p.is_file():
         raise HTTPException(404)
+    return p
+
+
+def preset_file(name: str, must_exist=True) -> Path:
+    """presets/<name>.json; names are plain text, no path parts."""
+    if not re.fullmatch(r"[\w .()-]{1,80}", name) or name.strip(" .") != name:
+        raise HTTPException(400, "Preset names: letters, digits, spaces and . ( ) - _ only")
+    p = PRESET_DIR / f"{name}.json"
+    if must_exist and not p.is_file():
+        raise HTTPException(404, f"No preset {name!r}")
     return p
 
 
@@ -197,6 +213,31 @@ def output_pdf(name: str):
 @app.delete("/api/output/{name}")
 def delete_output(name: str):
     move_to_trash(output_file(name))
+    return dict(deleted=name)
+
+
+@app.get("/api/presets")
+def list_presets():
+    return sorted((f.stem for f in PRESET_DIR.glob("*.json")), key=str.lower) if PRESET_DIR.is_dir() else []
+
+
+@app.get("/api/presets/{name}")
+def get_preset(name: str):
+    return json.loads(preset_file(name).read_text())
+
+
+@app.put("/api/presets/{name}")
+def save_preset(name: str, options: dict):
+    p = preset_file(name, must_exist=False)
+    options.pop("api_key", None)  # keys stay in env / config.local.json, never in presets
+    PRESET_DIR.mkdir(exist_ok=True)
+    p.write_text(json.dumps(options, indent=2))
+    return dict(saved=name)
+
+
+@app.delete("/api/presets/{name}")
+def delete_preset(name: str):
+    move_to_trash(preset_file(name))
     return dict(deleted=name)
 
 

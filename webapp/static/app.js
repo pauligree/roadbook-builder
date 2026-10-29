@@ -121,24 +121,100 @@ const COLOR_PRESETS = {
   mono: ["Black & white print", ["#b0b0b0", "#606060", "#000000"]],
 };
 
+// The whole form as stored (localStorage and race presets): every field
+// but the API key, which stays on the server.
+function snapshotOptions() {
+  const { api_key, ...rest } = Object.fromEntries(new FormData(form).entries());
+  return { ...rest, pages: form.elements.pages.value,  // disabled in custom split: FormData skips it
+    part_tables: form.elements.part_tables.checked, final_table: form.elements.final_table.checked, _v: 2 };
+}
+
+function applyOptions(saved) {
+  if (!saved._v) delete saved.provider;  // saved before the server-chosen default existed
+  for (const [k, v] of Object.entries(saved)) {
+    const el = form.elements[k];
+    if (!el || k === "api_key") continue;
+    if (el.type === "checkbox") el.checked = !!v; else el.value = v;
+  }
+}
+
 function restoreOptions() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
-    if (!saved._v) delete saved.provider;  // saved before the server-chosen default existed
-    for (const [k, v] of Object.entries(saved)) {
-      const el = form.elements[k];
-      if (!el || k === "api_key") continue;
-      if (el.type === "checkbox") el.checked = !!v; else el.value = v;
-    }
+    applyOptions(JSON.parse(localStorage.getItem(STORE_KEY) || "{}"));
   } catch (_) { /* storage unavailable: defaults are fine */ }
 }
 
 function saveOptions() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(snapshotOptions())); } catch (_) {}
+}
+
+// ---- race presets (server-side, presets/<name>.json) -------------------
+// A preset is a full option set; per-track things (custom splits, moved
+// labels) stay with the GPX file, not the preset.
+const presetUrl = (name) => `/api/presets/${encodeURIComponent(name)}`;
+
+async function loadPresets(selected = $("presetSel").value) {
+  const names = await api("/api/presets");
+  const sel = $("presetSel");
+  sel.innerHTML = `<option value="">— none —</option>`;
+  for (const n of names) sel.add(new Option(n, n));
+  sel.value = names.includes(selected) ? selected : "";
+  $("presetDel").disabled = !sel.value;
+}
+
+function presetNote(msg, warn = false) {
+  $("presetNote").textContent = msg; $("presetNote").className = "note" + (warn ? " warn" : "");
+}
+
+$("presetSel").onchange = async () => {
+  const name = $("presetSel").value;
+  $("presetDel").disabled = !name;
+  if (!name) return;
   try {
-    const { api_key, ...rest } = Object.fromEntries(new FormData(form).entries());
-    localStorage.setItem(STORE_KEY, JSON.stringify({ ...rest, part_tables: form.elements.part_tables.checked,
-      final_table: form.elements.final_table.checked, _v: 2 }));
-  } catch (_) {}
+    applyOptions(await api(presetUrl(name)));
+  } catch (err) { presetNote(err.message, true); return; }
+  $("presetName").value = name;
+  presetNote(`Loaded “${name}”.`);
+  syncPresetFromColors(); syncOptionLabels(); saveOptions();
+  renderSplitList(); draw(); scheduleAnalyze(0);
+};
+
+$("presetSave").onclick = async () => {
+  const name = $("presetName").value.trim();
+  if (!name) { presetNote("Type a name for the preset first.", true); $("presetName").focus(); return; }
+  try {
+    const res = await fetch(presetUrl(name), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(snapshotOptions()),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    await loadPresets(name);
+    presetNote(`Saved “${name}”.`);
+  } catch (err) { presetNote(err.message, true); }
+};
+$("presetName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("presetSave").click(); });
+
+// Two clicks like the file rows' ×: "Delete" arms, "Delete?" within 3 s deletes.
+{
+  const del = $("presetDel");
+  let timer = null;
+  const disarm = () => { clearTimeout(timer); del.classList.remove("armed"); del.textContent = "Delete"; };
+  del.onblur = disarm;
+  del.onclick = async () => {
+    const name = $("presetSel").value;
+    if (!name) return;
+    if (!del.classList.contains("armed")) {
+      del.classList.add("armed"); del.textContent = "Delete?";
+      timer = setTimeout(disarm, 3000);
+      return;
+    }
+    disarm();
+    try {
+      const res = await fetch(presetUrl(name), { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+      await loadPresets("");
+      presetNote(`Moved “${name}” to the Trash.`);
+    } catch (err) { presetNote(err.message, true); }
+  };
 }
 
 // ---- dragged label offsets, per GPX file -------------------------------
@@ -1069,6 +1145,7 @@ drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove
   form.elements.preset.innerHTML = Object.entries(COLOR_PRESETS).map(([k, [name]]) => `<option value="${k}">${name}</option>`).join("")
     + `<option value="custom">Custom</option>`;
   restoreOptions();
+  loadPresets().catch((err) => presetNote(err.message, true));
   syncPresetFromColors();
   syncOptionLabels();
   setView("overview");

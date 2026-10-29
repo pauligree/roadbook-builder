@@ -89,6 +89,12 @@ python -m webapp.server
   uses — header text, aspect-correct map panel, labels, profile, footer — plus
   tile count and approximate print ppi for the chosen zoom.
 - **Final PDF** tab: the rendered roadbook, once you press *Render roadbook*.
+- **Race presets:** the *Race preset* box at the top of Options saves the
+  whole option set (pages, zoom, provider + style ID, tables, race title,
+  radius, style) under a name, e.g. `TORX 2026`, as `presets/<name>.json`
+  (gitignored). Picking a preset loads it; *Save* with an existing name
+  overwrites it. API keys are never stored in presets. Per-track settings —
+  custom page splits and moved labels — stay with the GPX, not the preset.
 - **Deleting files:** click the **×** button beside a GPX or an output PDF, then
   **Delete?** to confirm. Files go to the macOS Trash, not straight to oblivion.
 
@@ -406,6 +412,7 @@ roadbook-builder/
 ├── input/                    put source .gpx files here
 ├── work/                     intermediates (parsed cache, tiles, un-merged PDFs) — safe to delete, regenerable
 ├── output/                   final roadbook PDFs
+├── presets/                  web app race presets (<name>.json), created on first save
 └── roadbook/
     ├── parse_gpx.py          step 1: GPX -> work/<slug>_data.pkl
     ├── fetch_basemap.py      step 2: tiles -> work/<slug>_basemaps/ (pageN_raw.jpg, bounds.json)
