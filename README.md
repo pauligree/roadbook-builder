@@ -95,6 +95,13 @@ python -m webapp.server
   (gitignored). Picking a preset loads it; *Save* with an existing name
   overwrites it. API keys are never stored in presets. Per-track settings —
   custom page splits and moved labels — stay with the GPX, not the preset.
+- **Batch render:** open *Batch render* under the render button, tick the
+  tracks (a folder's checkbox ticks the whole folder) and press *Render N
+  tracks*. They render one after another with the current options — pick a
+  race preset first — in list order, each with its own custom split and moved
+  labels. A failing track doesn't stop the rest. With *Also merge into one
+  PDF* the successful ones are combined into `output/<race title>_ALL.pdf`,
+  like the CLI's `--merge` (one shared layer pair for the whole book).
 - **Deleting files:** click the **×** button beside a GPX or an output PDF, then
   **Delete?** to confirm. Files go to the macOS Trash, not straight to oblivion.
 

@@ -212,3 +212,12 @@ input[type=range]:disabled{opacity:.4}
 .presets .btn-row .ghost { flex: none; }
 .ghost.armed { border-color: var(--err); background: var(--err); color: #fff; font-weight: 600; }
 .ghost:disabled { opacity: .45; cursor: default; border-color: var(--line); color: var(--ink); }
+
+/* batch render: collapsible, track checklist grouped by folder */
+.batch { margin-top: 14px; }
+.batch > summary { cursor: pointer; list-style: revert; }
+.batch .btn-row { margin-bottom: 4px; }
+.batch-list { margin-bottom: 10px; }
+.batch-list .folder { font-weight: 600; color: var(--muted); }
+#progressMsg { white-space: pre-line; }
+.batch-list span { overflow-wrap: anywhere; }

@@ -226,3 +226,9 @@ def analyze(gpx_path, opts: RenderOptions):
 
 def render(gpx_path, opts: RenderOptions, progress=None) -> Path:
     return run_pipeline.process_one(Path(gpx_path), opts.as_args(), progress=progress)
+
+
+def merge(gpx_paths, race_title=None) -> Path:
+    """One output/<race>_ALL.pdf from sectors already rendered with render(),
+    in the given order."""
+    return run_pipeline.merge_sectors([Path(p) for p in gpx_paths], race_title)

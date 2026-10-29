@@ -165,6 +165,23 @@
         <div id="progressMsg" class="note"></div>
       </div>
 
+      <details id="batch" class="batch">
+        <summary class="pane-title sub">Batch render</summary>
+        <small class="note">Renders the ticked tracks with the options above, in list order
+          (= sector order). Each track keeps its own custom split and moved labels.</small>
+        <div class="btn-row">
+          <button type="button" id="batchAll" class="ghost">All</button>
+          <button type="button" id="batchNone" class="ghost">None</button>
+        </div>
+        <div id="batchList" class="split-list batch-list"></div>
+        <label class="field check">
+          <input id="batchMerge" type="checkbox" checked>
+          <span>Also merge into one PDF</span>
+        </label>
+        <small id="batchNote" class="note"></small>
+        <button type="button" id="batchBtn" class="primary" disabled>Render tracks</button>
+      </details>
+
       <div class="pane-title sub">Recent output</div>
       <div id="outputList" class="output-list"></div>
     </aside>

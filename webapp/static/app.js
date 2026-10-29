@@ -27,7 +27,7 @@ const STORE_KEY = "roadbook.options";
 // re-running /api/analyze.
 const isStyleField = (name) => form.elements[name]?.dataset?.style !== undefined;
 
-function readOptions() {
+function readOptions(file = state.file) {
   const o = {};
   for (const [k, v] of new FormData(form).entries()) if (!isStyleField(k)) o[k] = v;
   o.pages = +form.elements.pages.value;  // read directly: disabled fields skip FormData
@@ -36,8 +36,8 @@ function readOptions() {
   o.final_table = form.elements.final_table.checked;
   // custom split, once this file has one (until then the equal split
   // is analyzed and seeds it, see renderSplitList)
-  if (o.split_mode === "waypoints" && splitStore[state.file]) {
-    o.splits = fileSplits();
+  if (o.split_mode === "waypoints" && splitStore[file]) {
+    o.splits = fileSplits(file);
     if (!o.splits.length) o.pages = 1;  // no page ends chosen = one page
   }
   delete o.split_mode;
@@ -49,7 +49,7 @@ function readOptions() {
 const SPLITS_KEY = "roadbook.splits";
 let splitStore = {};
 try { splitStore = JSON.parse(localStorage.getItem(SPLITS_KEY) || "{}"); } catch (_) {}
-const fileSplits = () => splitStore[state.file] || [];
+const fileSplits = (file = state.file) => splitStore[file] || [];
 function setFileSplits(kms) {
   splitStore[state.file] = [...new Set(kms.map((k) => +k.toFixed(3)))].sort((a, b) => a - b);
   try { localStorage.setItem(SPLITS_KEY, JSON.stringify(splitStore)); } catch (_) {}
@@ -101,7 +101,7 @@ $("splitList").addEventListener("change", () => {
 });
 
 // Same keys as render_pages.DEFAULT_STYLE
-function readStyle() {
+function readStyle(file = state.file) {
   const e = form.elements;
   return {
     label_font: e.label_font.value || null,
@@ -109,7 +109,7 @@ function readStyle() {
     profile_width: +e.profile_width.value,
     grade_colors: [e.c_desc.value, e.c_flat.value, e.c_climb.value],
     grade_max: +e.grade_max.value || null,
-    label_offsets: state.file ? fileOffsets() : {},
+    label_offsets: file ? fileOffsets(file) : {},
   };
 }
 
@@ -175,7 +175,7 @@ $("presetSel").onchange = async () => {
   } catch (err) { presetNote(err.message, true); return; }
   $("presetName").value = name;
   presetNote(`Loaded “${name}”.`);
-  syncPresetFromColors(); syncOptionLabels(); saveOptions();
+  syncPresetFromColors(); syncOptionLabels(); saveOptions(); updateBatch();
   renderSplitList(); draw(); scheduleAnalyze(0);
 };
 
@@ -224,7 +224,7 @@ const LABELS_KEY = "roadbook.labels";
 let labelStore = {};
 try { labelStore = JSON.parse(localStorage.getItem(LABELS_KEY) || "{}"); } catch (_) {}
 
-function fileOffsets() { return (labelStore[state.file] ||= {}); }
+function fileOffsets(file = state.file) { return (labelStore[file] ||= {}); }
 function saveLabels() {
   try { localStorage.setItem(LABELS_KEY, JSON.stringify(labelStore)); } catch (_) {}
   updateLabelCount();
@@ -350,6 +350,7 @@ function fileRow(item, deleteUrl, onDeleted) {
 // ---- left pane: files ---------------------------------------------------
 async function loadFiles() {
   state.files = await api("/api/files");
+  renderBatchList();
   const list = $("fileList");
   list.innerHTML = "";
   let folder = null;
@@ -1000,32 +1001,118 @@ function showFinal() {
 }
 
 async function startRender() {
-  if (!state.file) return;
+  if (!state.file || state.job) return;
   const box = $("progress");
   box.hidden = false; box.className = "progress";
-  $("renderBtn").disabled = true;
+  setBusy(true);
   try {
     state.job = await api("/api/render", { file: state.file, options: { ...readOptions(), style: readStyle() } });
     pollJob();
   } catch (e) {
     box.className = "progress error"; $("progressMsg").textContent = e.message;
-    $("renderBtn").disabled = false;
+    setBusy(false);
   }
 }
 
 async function pollJob() {
   const job = state.job = await api(`/api/jobs/${state.job.id}`);
-  $("barFill").style.width = `${Math.min(100, (job.step / 4) * 100 - (job.status === "done" ? 0 : 8))}%`;
-  $("progressMsg").textContent = `${job.file}: ${job.message}`;
-  if (job.status === "done" || job.status === "error") {
-    $("progress").className = "progress " + job.status;
-    $("renderBtn").disabled = false;
+  const finished = job.status === "done" || job.status === "error";
+  let frac = job.step / 4, msg = `${job.file}: ${job.message}`;
+  if (job.kind === "batch") {
+    // 4 steps per track, plus one for the merge
+    const units = job.n * 4 + (job.merge ? 1 : 0);
+    const done = job.file === "all tracks" ? job.n * 4 : Math.max(0, job.index - 1) * 4 + job.step;
+    frac = finished ? 1 : done / units;
+    msg = finished ? job.message : `[${job.index}/${job.n}] ${msg}`;
+    if (finished) msg += job.failed.map((f) => `\n✗ ${f.file}: ${f.error}`).join("");
+  }
+  $("barFill").style.width = `${Math.min(100, frac * 100 - (finished ? 0 : 8))}%`;
+  $("progressMsg").textContent = msg;
+  if (finished) {
+    $("progress").className = "progress " + (job.status === "done" && job.failed?.length ? "error" : job.status);
     state.job = null;
+    setBusy(false);
     await loadOutputs();
-    if (job.status === "done") setView("final");
+    if (job.kind !== "batch" && job.status === "done") setView("final");
+    else if (state.view === "final") showFinal();
     return;
   }
   setTimeout(pollJob, 700);
+}
+
+// One render job at a time from this page (the server queues anyway).
+function setBusy(busy) {
+  $("renderBtn").disabled = busy || !state.file;
+  updateBatch(busy);
+}
+
+// ---- batch render --------------------------------------------------------
+// Ticked tracks, remembered per browser; rendered in the file list's order.
+const BATCH_KEY = "roadbook.batch";
+let batchSel = new Set();
+try { batchSel = new Set(JSON.parse(localStorage.getItem(BATCH_KEY) || "[]")); } catch (_) {}
+function saveBatch() { try { localStorage.setItem(BATCH_KEY, JSON.stringify([...batchSel])); } catch (_) {} }
+const batchFiles = () => state.files.filter((f) => batchSel.has(f.path));
+
+// Must match run_pipeline.merge_sectors()
+const mergedName = (title) =>
+  `${(title || "roadbook").replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase() || "roadbook"}_ALL.pdf`;
+
+function renderBatchList() {
+  const list = $("batchList");
+  list.innerHTML = "";
+  for (const folder of [...new Set(state.files.map((f) => f.folder))]) {
+    const inFolder = state.files.filter((f) => f.folder === folder);
+    const head = document.createElement("label");
+    head.className = "folder";
+    const all = document.createElement("input");
+    all.type = "checkbox";
+    all.checked = inFolder.every((f) => batchSel.has(f.path));
+    all.indeterminate = !all.checked && inFolder.some((f) => batchSel.has(f.path));
+    all.onchange = () => {
+      for (const f of inFolder) all.checked ? batchSel.add(f.path) : batchSel.delete(f.path);
+      saveBatch(); renderBatchList();
+    };
+    head.append(all, folder + "/");
+    list.appendChild(head);
+    for (const f of inFolder) {
+      const row = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = batchSel.has(f.path);
+      cb.onchange = () => { cb.checked ? batchSel.add(f.path) : batchSel.delete(f.path); saveBatch(); renderBatchList(); };
+      const name = document.createElement("span");
+      name.textContent = f.name.replace(/\.gpx$/i, ""); name.title = f.name;
+      row.append(cb, name);
+      list.appendChild(row);
+    }
+  }
+  updateBatch(!!state.job);
+}
+
+function updateBatch(busy = !!state.job) {
+  const n = batchFiles().length, merge = $("batchMerge").checked && n > 1;
+  $("batchBtn").disabled = busy || !n;
+  $("batchBtn").textContent = n ? `Render ${n} track${n > 1 ? "s" : ""}${merge ? " + merge" : ""}` : "Render tracks";
+  $("batchNote").textContent = merge ? `Merged PDF → output/${mergedName(form.elements.race_title.value.trim())}` : "";
+}
+
+async function startBatch() {
+  const files = batchFiles();
+  if (!files.length || state.job) return;
+  const box = $("progress");
+  box.hidden = false; box.className = "progress";
+  $("barFill").style.width = "0";
+  setBusy(true);
+  try {
+    state.job = await api("/api/batch", {
+      merge: $("batchMerge").checked,
+      items: files.map((f) => ({ file: f.path, options: { ...readOptions(f.path), style: readStyle(f.path) } })),
+    });
+    pollJob();
+  } catch (e) {
+    box.className = "progress error"; $("progressMsg").textContent = e.message;
+    setBusy(false);
+  }
 }
 
 // ---- wiring ------------------------------------------------------------
@@ -1035,13 +1122,17 @@ form.addEventListener("input", (e) => {
     const [c1, c2, c3] = COLOR_PRESETS[e.target.value][1];
     form.elements.c_desc.value = c1; form.elements.c_flat.value = c2; form.elements.c_climb.value = c3;
   } else if (/^c_/.test(name)) syncPresetFromColors();
-  syncOptionLabels(); saveOptions();
+  syncOptionLabels(); saveOptions(); updateBatch();
   if (isStyleField(name)) { draw(); return; }  // style: local redraw only
   if (name === "pages") renderSplitList();
   // title only changes text; everything else changes page split / bounds
   scheduleAnalyze(name === "race_title" ? 300 : 120);
 });
 $("renderBtn").onclick = startRender;
+$("batchBtn").onclick = startBatch;
+$("batchMerge").onchange = () => updateBatch();
+$("batchAll").onclick = () => { for (const f of state.files) batchSel.add(f.path); saveBatch(); renderBatchList(); };
+$("batchNone").onclick = () => { batchSel.clear(); saveBatch(); renderBatchList(); };
 $("prevPage").onclick = () => setSheetIdx(state.sheetIdx - 1);
 $("nextPage").onclick = () => setSheetIdx(state.sheetIdx + 1);
 for (const t of document.querySelectorAll(".tab")) t.onclick = () => setView(t.dataset.view);

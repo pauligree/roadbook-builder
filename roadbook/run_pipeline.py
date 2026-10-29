@@ -142,6 +142,23 @@ def process_one(gpx_path: Path, args, out_override: Path = None, progress=None) 
     return out_pdf
 
 
+def merge_sectors(gpx_files, race_title=None):
+    """Combine already-processed sectors, in the given order, into one
+    output/<race>_ALL.pdf and return its path. Rebuilt straight from each
+    sector's intermediate vector-PDF + basemap JPGs (still sitting in
+    WORK_DIR from process_one) rather than concatenating the already-merged
+    per-sector PDFs — see merge_layers.merge_multi()'s docstring for why."""
+    merged_slug = re.sub(r"[^a-zA-Z0-9]+", "_", race_title or "roadbook").strip("_").lower() or "roadbook"
+    merged_path = OUTPUT_DIR / f"{merged_slug}_ALL.pdf"
+    sectors = [
+        (WORK_DIR / f"{parse_gpx.slug_for(gpx_file)}_vector.pdf",
+         WORK_DIR / f"{parse_gpx.slug_for(gpx_file)}_basemaps")
+        for gpx_file in gpx_files
+    ]
+    merge_layers.merge_multi(sectors, merged_path)
+    return merged_path
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("gpx_path", help="A single .gpx file, OR a directory to scan for *.gpx files")
@@ -211,20 +228,9 @@ def main():
             if not succeeded:
                 print("\n--merge requested but no sector succeeded — nothing to merge.")
             else:
-                merged_slug = re.sub(r"[^a-zA-Z0-9]+", "_", args.race_title or "roadbook").strip("_").lower()
-                merged_path = OUTPUT_DIR / f"{merged_slug}_ALL.pdf"
                 # succeeded is already in gpx_files order (sorted filenames),
-                # which is the natural sector order for this race. Rebuild
-                # straight from each sector's intermediate vector-PDF +
-                # basemap JPGs (still sitting in work/ from process_one)
-                # rather than concatenating the already-merged per-sector
-                # PDFs — see merge_layers.merge_multi()'s docstring for why.
-                sectors = [
-                    (WORK_DIR / f"{parse_gpx.slug_for(gpx_file)}_vector.pdf",
-                     WORK_DIR / f"{parse_gpx.slug_for(gpx_file)}_basemaps")
-                    for gpx_file, _out_pdf in succeeded
-                ]
-                merge_layers.merge_multi(sectors, merged_path)
+                # which is the natural sector order for this race.
+                merged_path = merge_sectors([g for g, _out_pdf in succeeded], args.race_title)
                 print(f"\nMerged {len(succeeded)} PDF(s) -> {merged_path}")
 
     elif target.is_file():

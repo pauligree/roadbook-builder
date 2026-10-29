@@ -10,6 +10,7 @@ Endpoints:
     POST /api/upload             multipart .gpx upload -> saved into input/
     POST /api/analyze            {file, options} -> schematic preview data
     POST /api/render             {file, options} -> {job}
+    POST /api/batch              {items: [{file, options}], merge} -> {job}
     GET  /api/jobs/{job}         render progress / result
     GET  /api/output             finished roadbook PDFs
     GET  /output/{name}          serve a finished PDF
@@ -50,6 +51,11 @@ app = FastAPI(title="Roadbook Builder")
 class JobRequest(BaseModel):
     file: str
     options: dict = {}
+
+
+class BatchRequest(BaseModel):
+    items: list[JobRequest]  # in sector order; options per file (own splits, labels)
+    merge: bool = True
 
 
 def resolve_gpx(rel: str) -> Path:
@@ -175,16 +181,70 @@ def _run_job(job_id, gpx, opts):
             job.update(status="error", message=str(e))
 
 
-@app.post("/api/render")
-def render(req: JobRequest):
-    gpx = resolve_gpx(req.file)
-    opts = parse_options(req.options)
+def check_key(opts):
     try:  # fail before queueing, not after the parse step
         fetch_basemap.resolve_api_key(opts.provider, opts.api_key)
     except fetch_basemap.BasemapFetchError:
         env = fetch_basemap.PROVIDERS[opts.provider]["key_env_var"]
         raise HTTPException(400, f"{opts.provider} needs an API key: enter it under Map provider, "
                                  f"or set {env} before starting the server.")
+
+
+def _run_batch(job_id, items, merge):
+    """Render each (gpx, opts) in order; one failing track doesn't stop the
+    rest (like the CLI's directory mode). Then merge what succeeded."""
+    job = _jobs[job_id]
+    with _render_lock:
+        job.update(status="running", message="Starting")
+        ok = []
+        for i, (gpx, opts) in enumerate(items, 1):
+            job.update(index=i, file=gpx.name, step=0, message="Starting")
+
+            def progress(step, message):
+                job.update(step=step, message=message)
+                job["log"].append(f"{gpx.name}: {message}")
+
+            try:
+                job["pdfs"].append(api.render(gpx, opts, progress=progress).name)
+                ok.append(gpx)
+            except Exception as e:
+                traceback.print_exc()
+                job["failed"].append(dict(file=gpx.name, error=str(e)))
+        if merge and len(ok) > 1:
+            job.update(file="all tracks", step=4, message=f"Merging {len(ok)} roadbooks")
+            try:
+                job["merged"] = api.merge(ok, items[0][1].race_title).name
+            except Exception as e:
+                traceback.print_exc()
+                job["failed"].append(dict(file="merged PDF", error=str(e)))
+        n_bad = len(job["failed"])
+        job.update(status="error" if not ok else "done", step=4,
+                   message=f"{len(ok)} of {len(items)} rendered" + (f", {n_bad} failed" if n_bad else "")
+                           + (f" · merged → {job['merged']}" if job["merged"] else ""))
+
+
+@app.post("/api/batch")
+def batch(req: BatchRequest):
+    if not req.items:
+        raise HTTPException(400, "Choose at least one track")
+    items = [(resolve_gpx(it.file), parse_options(it.options)) for it in req.items]
+    if len({g for g, _ in items}) != len(items):
+        raise HTTPException(400, "A track is listed twice")
+    for _, opts in items:
+        check_key(opts)
+    job_id = uuid.uuid4().hex[:12]
+    _jobs[job_id] = dict(id=job_id, kind="batch", file=items[0][0].name, status="queued",
+                         index=0, n=len(items), step=0, total=4, message="Queued", log=[],
+                         pdfs=[], failed=[], merged=None, merge=req.merge and len(items) > 1)
+    threading.Thread(target=_run_batch, args=(job_id, items, req.merge), daemon=True).start()
+    return _jobs[job_id]
+
+
+@app.post("/api/render")
+def render(req: JobRequest):
+    gpx = resolve_gpx(req.file)
+    opts = parse_options(req.options)
+    check_key(opts)
     job_id = uuid.uuid4().hex[:12]
     _jobs[job_id] = dict(id=job_id, file=gpx.name, status="queued", step=0, total=4,
                          message="Queued", log=[], pdf=None)

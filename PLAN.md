@@ -49,7 +49,7 @@ render service in Phase 2 option A.
 - [x] Style panel: label font, track/profile line width, editable colour scale
       (presets + custom stops + range), draggable map/profile labels → PDF
 - [x] Presets per race (save/load option sets) — server-side `presets/<name>.json`, no API keys
-- [ ] Batch render + "merge all" from UI
+- [x] Batch render + "merge all" from UI — `POST /api/batch`, per-track splits/labels, `run_pipeline.merge_sectors()` shared with the CLI
 
 ## Phase 1b — Mac app
 
