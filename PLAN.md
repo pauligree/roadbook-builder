@@ -71,8 +71,9 @@ Priority order:
    track, leader crossings) for start/end and POI labels; preview mirrors it.
 4. ✅ **Basemap tuning** — optional desaturate/lighten so track pops, hillshade
    (`--saturation`, `--lighten`, `--hillshade` from AWS Terrain Tiles).
-5. **Gradient legend + binned colours** (0–5 / 5–10 / 10–20 / 20 %+),
-   readable in print and B&W.
+5. ✅ **Gradient legend + binned colours** (0–5 / 5–10 / 10–20 / 20 %+),
+   readable in print and B&W (`grade_bins` style key; colour bar ticks now
+   readable on the map side).
 6. **Profile upgrades** — smoothed elevation line, aid stations / cut-offs,
    cumulative D+.
 7. **Page formats** — A4/A5/landscape, embedded custom font, cover +

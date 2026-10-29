@@ -354,6 +354,7 @@ also be set per render with a JSON file — this is what the web app's
   "profile_width": 1.2,
   "grade_colors": ["#1a9850", "#e6c229", "#d73027"],
   "grade_max": 25,
+  "grade_bins": [5, 10, 20],
   "label_offsets": {"map:1:12.40": [-90, 20], "prof:1:12.40": [10, -30]}
 }
 ```
@@ -367,6 +368,15 @@ Every key is optional (see `DEFAULT_STYLE` in `render_pages.py`).
 `map:<page>:start|end`); values are points from the labelled point to the
 label's top-left corner, y down. In the web app you set them by dragging
 labels in *Page layout* — they're remembered per GPX file in the browser.
+
+`grade_bins` swaps the smooth colour scale for classes: `[5, 10, 20]` gives
+seven — steeper than -20 %, -20 to -10, -10 to -5, -5 to +5 (flat), +5 to
++10, +10 to +20, steeper than +20 — coloured evenly along `grade_colors`
+from full descent through flat to full climb (`grade_max` is then
+ignored). Distinct steps read far better on paper, and with the black &
+white colour preset they become clearly separate greys. The colour bar on
+each map turns into the matching legend, with the class edges labelled.
+Web app: *Colour steps* under Style.
 
 ## 5. Using the output
 

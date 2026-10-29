@@ -148,6 +148,7 @@ function readStyle(file = state.file) {
     profile_width: +e.profile_width.value,
     grade_colors: [e.c_desc.value, e.c_flat.value, e.c_climb.value],
     grade_max: +e.grade_max.value || null,
+    grade_bins: e.grade_bins.value ? e.grade_bins.value.split(",").map(Number) : null,
     label_offsets: file ? fileOffsets(file) : {},
   };
 }
@@ -298,7 +299,11 @@ function syncOptionLabels() {
   $("gradeOut").textContent = state.style.grade_max
     ? `±${state.style.grade_max} %`
     : `auto${state.data ? ` (±${state.data.grade_vmax.toFixed(0)} %)` : ""}`;
-  $("scalePreview").style.background = `linear-gradient(90deg, ${state.style.grade_colors.join(", ")})`;
+  const bins = state.style.grade_bins;
+  $("scalePreview").style.background = bins
+    ? `linear-gradient(90deg, ${binColors().map((c, i, all) => `${c} ${i / all.length * 100}% ${(i + 1) / all.length * 100}%`).join(", ")})`
+    : `linear-gradient(90deg, ${state.style.grade_colors.join(", ")})`;
+  form.elements.grade_max.disabled = !!bins;  // classes have fixed edges
 }
 
 function syncPresetFromColors() {
@@ -570,12 +575,27 @@ const COLORS = () => {
 const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 const gradeVmax = () => state.style.grade_max || state.data.grade_vmax;
 
-function gradeColor(g) {
-  const vmax = gradeVmax(), stops = state.style.grade_colors.map(hexRgb);
-  let t = Math.max(0, Math.min(1, (g + vmax) / (2 * vmax))) * (stops.length - 1);
+// colour at t in 0..1 along the descent -> flat -> climb stops
+function scaleColor(t) {
+  const stops = state.style.grade_colors.map(hexRgb);
+  t = Math.max(0, Math.min(1, t)) * (stops.length - 1);
   const i = Math.min(Math.floor(t), stops.length - 2); t -= i;
   const c = stops[i].map((v, k) => Math.round(v + (stops[i + 1][k] - v) * t));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+// Class edges and colours, as render_pages.binned_scale: bins [5, 10, 20]
+// -> edges -20 -10 -5 5 10 20, seven classes sampled evenly along the scale.
+const binEdges = () => { const b = state.style.grade_bins; return [...b.map((v) => -v).reverse(), ...b]; };
+const binColors = () => { const n = state.style.grade_bins.length * 2 + 1; return [...Array(n)].map((_, i) => scaleColor(i / (n - 1))); };
+
+function gradeColor(g) {
+  if (state.style.grade_bins) {
+    const k = binEdges().filter((e) => g >= e).length;
+    return binColors()[k];
+  }
+  const vmax = gradeVmax();
+  return scaleColor((g + vmax) / (2 * vmax));
 }
 
 // Canvas font for labels. Matplotlib's default (DejaVu Sans) is rarely
@@ -1020,12 +1040,19 @@ function drawPage(W, H) {
   ctx.fillStyle = "#000"; ctx.beginPath(); ctx.moveTo(nx, ny - pt(14)); ctx.lineTo(nx - pt(4), ny - pt(4)); ctx.lineTo(nx + pt(4), ny - pt(4)); ctx.fill();
   label("N", nx, ny, { size: pt(10.5), bold: true, align: "center" });
   const cbx = mx + mw * (1 - 0.012 - 0.018), cby = my + mh * 0.02, cbh = mh * 0.28;
-  const grad = ctx.createLinearGradient(0, cby + cbh, 0, cby);
-  state.style.grade_colors.forEach((c, i, all) => grad.addColorStop(i / (all.length - 1), c));
-  ctx.fillStyle = grad; ctx.fillRect(cbx, cby, mw * 0.018, cbh);
-  ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.strokeRect(cbx, cby, mw * 0.018, cbh);
-  label(`+${gradeVmax().toFixed(0)}%`, cbx - 3, cby, { size: pt(6.5), align: "right", bg: "rgba(0,0,0,.5)", color: "#fff" });
-  label(`-${gradeVmax().toFixed(0)}%`, cbx - 3, cby + cbh - pt(8), { size: pt(6.5), align: "right", bg: "rgba(0,0,0,.5)", color: "#fff" });
+  // colour bar with ticks on the map side, as render_pages
+  const cbw = mw * 0.018, tick = (txt, y) => label(txt, cbx - 3, y - pt(4), { size: pt(6.5), align: "right", bg: "rgba(255,255,255,.75)" });
+  if (state.style.grade_bins) {
+    const cols = binColors(), hh = cbh / cols.length;
+    cols.forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(cbx, cby + cbh - (i + 1) * hh, cbw, hh); });
+    binEdges().forEach((e, i) => tick(`${e > 0 ? "+" : ""}${e}`, cby + cbh - (i + 1) * hh));
+  } else {
+    const grad = ctx.createLinearGradient(0, cby + cbh, 0, cby);
+    state.style.grade_colors.forEach((c, i, all) => grad.addColorStop(i / (all.length - 1), c));
+    ctx.fillStyle = grad; ctx.fillRect(cbx, cby, cbw, cbh);
+    tick(`+${gradeVmax().toFixed(0)}`, cby); tick(`-${gradeVmax().toFixed(0)}`, cby + cbh);
+  }
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.strokeRect(cbx, cby, cbw, cbh);
   label(d.attribution, mx + mw * 0.01, my + mh * 0.99 - pt(9), { size: pt(6.5), color: "#fff", bg: "rgba(0,0,0,.55)" });
   ctx.restore();
   ctx.strokeStyle = "#1a1a2e"; ctx.lineWidth = pt(1); ctx.strokeRect(mx, my, mw, mh);

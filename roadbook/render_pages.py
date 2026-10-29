@@ -43,7 +43,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.collections import LineCollection
-from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.colors import BoundaryNorm, LinearSegmentedColormap, ListedColormap, Normalize
 from matplotlib.text import Text
 from matplotlib.transforms import Bbox
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
@@ -91,6 +91,7 @@ DEFAULT_STYLE = dict(
     profile_width=0.9,   # pt, gradient-coloured profile line (dark casing 0.6 pt wider)
     grade_colors=None,   # [descent, flat, climb] colours; None = GRADIENT_COLORS
     grade_max=None,      # % grade drawn at full colour; None = auto (97th percentile, clipped)
+    grade_bins=None,     # e.g. [5, 10, 20]: colour classes ±5/10/20 % instead of a smooth scale
     label_offsets={},    # {label key: [dx, dy]} — dragged labels, see label_key()
 )
 
@@ -149,6 +150,19 @@ def page_subtitle(d0, d1, custom, pois, total_km, start_name, end_name, max_len=
     names = [place_name(pois, k, total_km, start_name, end_name) for k in (d0, d1)]
     names = [n if len(n) <= max_len else n[:max_len - 1].rstrip() + "…" for n in names]
     return " → ".join(names)
+
+
+def binned_scale(cmap, bins):
+    """Colour classes instead of a smooth scale — easier to read on paper
+    and in black & white. bins [5, 10, 20] gives seven classes: <= -20,
+    -20..-10, -10..-5, -5..5 (flat), 5..10, 10..20, >= 20 %, coloured by
+    sampling `cmap` evenly from full descent through flat to full climb.
+    The outer edges (±1000 %) just catch everything steeper."""
+    inner = sorted(float(b) for b in bins)
+    bounds = [-1000.0, *(-b for b in reversed(inner)), *inner, 1000.0]
+    n = len(bounds) - 1
+    colors = [cmap(i / (n - 1)) for i in range(n)]
+    return ListedColormap(colors), BoundaryNorm(bounds, n)
 
 
 def compute_gradient(eles, dist):
@@ -332,9 +346,22 @@ def build_page(mode, page, ctx):
 
         cax = inset_axes(ax_m, width="1.8%", height="28%", loc="upper right",
                           bbox_to_anchor=(-0.012, -0.02, 1, 1), bbox_transform=ax_m.transAxes, borderpad=0)
-        cbar = fig.colorbar(lc, cax=cax)
-        cbar.set_label("grade (%)", fontsize=7.5, color="white")
-        cbar.ax.tick_params(labelsize=6.5, colors="white")
+        if isinstance(norm, BoundaryNorm):
+            # equal-height blocks, ticks on the class edges ("-20", ..., "+20")
+            edges = list(norm.boundaries[1:-1])
+            cbar = fig.colorbar(lc, cax=cax, spacing="uniform", ticks=edges)
+            cbar.ax.set_yticklabels([f"{t:+g}" for t in edges])
+        else:
+            cbar = fig.colorbar(lc, cax=cax)
+        # ticks + title on the map side (the right side runs off the panel),
+        # dark text with a white halo so they read on any basemap
+        cbar.ax.yaxis.set_ticks_position("left")
+        cbar.ax.yaxis.set_label_position("left")
+        halo = [pe.withStroke(linewidth=2.2, foreground="white")]
+        cbar.set_label("grade (%)", fontsize=7.5, color="#1a1a2e", path_effects=halo)
+        cbar.ax.tick_params(labelsize=6.5, colors="#1a1a2e")
+        for t in cbar.ax.get_yticklabels():
+            t.set_path_effects(halo)
         cbar.outline.set_edgecolor("white")
 
         # ---- labels: collision-aware placement ---------------------------
@@ -818,6 +845,8 @@ def main():
     cmap = (LinearSegmentedColormap.from_list("custom_grade", style["grade_colors"])
             if style["grade_colors"] else CMAP)
     norm = Normalize(vmin=-grad_vmax, vmax=grad_vmax)
+    if style["grade_bins"]:
+        cmap, norm = binned_scale(cmap, style["grade_bins"])
 
     pages_sorted = sorted(basemap_bounds)
     if all("d0" in basemap_bounds[p] for p in pages_sorted):

@@ -64,6 +64,10 @@ def clean_style(s):
         out["grade_colors"] = colors
     if s.get("grade_max"):
         out["grade_max"] = min(60.0, max(2.0, float(s["grade_max"])))
+    bins = s.get("grade_bins")
+    if isinstance(bins, list) and 1 <= len(bins) <= 6:
+        bins = sorted({round(min(60.0, max(1.0, float(b))), 1) for b in bins})
+        out["grade_bins"] = bins
     offsets = s.get("label_offsets")
     if isinstance(offsets, dict):
         out["label_offsets"] = {

@@ -190,6 +190,16 @@
         </div>
         <div id="scalePreview" class="scale-preview"></div>
         <label class="field">
+          <span>Colour steps</span>
+          <select name="grade_bins" data-style>
+            <option value="">Smooth scale</option>
+            <option value="5,10,20">Classes: 5 · 10 · 20 %</option>
+            <option value="5,10,15,25">Classes: 5 · 10 · 15 · 25 %</option>
+            <option value="3,8,15">Classes: 3 · 8 · 15 %</option>
+          </select>
+          <small class="note">Classes read better in print and in black &amp; white.</small>
+        </label>
+        <label class="field" id="gradeMaxField">
           <span>Full colour at <output id="gradeOut">auto</output></span>
           <input name="grade_max" type="range" min="0" max="50" step="1" value="0" data-style>
           <small class="note">0 = auto from the track (97th percentile, 15–35 %)</small>
