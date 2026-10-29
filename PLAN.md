@@ -29,7 +29,7 @@ render service in Phase 2 option A.
 - [x] Library API `roadbook/api.py`: `RenderOptions`, `analyze()` (JSON, no
       tiles), `render()` with progress callback. CLI keeps working.
 - [x] Configurable cache dir instead of hardcoded `work/` — `roadbook/config.py`: `ROADBOOK_WORK_DIR` or `"work_dir"` in config.local.json
-- [ ] Persistent tile cache keyed `provider/z/x/y`
+- [x] Persistent tile cache keyed `provider/z/x/y` — `work/tiles/<provider>/<style>/z/x/y.tile`, 30-day expiry, `--no-tile-cache`
 
 ## Phase 1a — web mockup
 

@@ -382,8 +382,15 @@ CC-BY-SA. The rendered pages always include the required attribution line in
 the map's corner — don't remove it if you redistribute the PDFs. The fetch
 script sets a descriptive `User-Agent` and uses modest concurrency
 (`--workers`, default 4); please don't crank that way up for large batch
-jobs — if you're going to regenerate the same area repeatedly, consider
-caching tiles locally instead of re-fetching every time.
+jobs.
+
+**Tile cache.** Every downloaded tile is kept in `work/tiles/<provider>/<style>/z/x/y.tile`
+and reused by later renders, so re-rendering the same race after tweaking
+options fetches nothing new (the console says `N from cache`). Tiles older
+than 30 days are downloaded again — maps change, and Mapbox/MapTiler only
+allow caching for a limited time. The API key is never stored with them.
+Delete `work/tiles/` any time to start fresh, or pass `--no-tile-cache` to
+`run_pipeline` / `fetch_basemap` to bypass it for one run.
 
 ## 9. Known limitations
 

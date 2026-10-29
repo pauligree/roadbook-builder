@@ -85,6 +85,8 @@ import json
 import math
 import os
 import pickle
+import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -98,6 +100,15 @@ from roadbook.config import LOCAL_CONFIG, WORK_DIR
 
 
 USER_AGENT = "roadbook-builder/1.0 (personal trail-race roadbook generator)"
+
+# Downloaded tiles are kept in WORK_DIR/tiles/<provider>/<style>/z/x/y.tile
+# (raw bytes as served; the API key is never part of the path) and reused by
+# later renders — tweaking options and re-rendering the same race then costs
+# no tile requests. Tiles older than TILE_CACHE_MAX_AGE_DAYS are fetched
+# again: maps do change, and Mapbox/MapTiler terms allow caching only for a
+# limited time. Safe to delete at any time. --no-tile-cache bypasses it.
+TILE_CACHE_DIR = WORK_DIR / "tiles"
+TILE_CACHE_MAX_AGE_DAYS = 30
 
 # Each provider's tiles url is built by build_tile_url() below. "subdomains"
 # is only meaningful for the {s} placeholder (request sharding across
@@ -206,13 +217,39 @@ def build_tile_url(provider, z, x, y, style=None, api_key=None):
         raise ValueError(f"Unknown provider: {provider}")
 
 
-def fetch_tile(session, provider, z, x, y, style=None, api_key=None, retries=3):
+def tile_cache_path(provider, z, x, y, style=None):
+    # opentopomap has a single style; for the others the style/map ID picks
+    # the look, so it is part of the key ("mapbox/outdoors-v12" -> one dir)
+    style_dir = re.sub(r"[^\w.-]+", "_", style) if style and PROVIDERS[provider]["needs_key"] else "default"
+    return TILE_CACHE_DIR / provider / style_dir / str(z) / str(x) / f"{y}.tile"
+
+
+def read_cached_tile(path):
+    """The cached tile as an RGB image, or None if missing, expired or
+    unreadable (a half-written or corrupt file is simply fetched again)."""
+    try:
+        if time.time() - path.stat().st_mtime > TILE_CACHE_MAX_AGE_DAYS * 86400:
+            return None
+        return Image.open(path).convert("RGB")
+    except (OSError, ValueError):
+        return None
+
+
+def fetch_tile(session, provider, z, x, y, style=None, api_key=None, retries=3, save_to=None):
+    """Download one tile. With `save_to`, the response bytes are also
+    written there (atomically: tiles are fetched from several threads)."""
     url = build_tile_url(provider, z, x, y, style=style, api_key=api_key)
     for attempt in range(retries):
         try:
             resp = session.get(url, timeout=10)
             if resp.status_code == 200:
-                return Image.open(io.BytesIO(resp.content)).convert("RGB")
+                img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+                if save_to:
+                    save_to.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = save_to.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
+                    tmp.write_bytes(resp.content)
+                    tmp.replace(save_to)
+                return img
             if resp.status_code in (400, 401, 403, 404):
                 # Bad/missing key, bad style or map ID, malformed request —
                 # not worth retrying 3x, and worth surfacing clearly rather
@@ -232,27 +269,32 @@ def fetch_tile(session, provider, z, x, y, style=None, api_key=None, retries=3):
 
 
 def build_mosaic(session, provider, zoom, x0, x1, y0, y1, style=None, api_key=None,
-                  tile_px=256, workers=4):
-    """Returns (mosaic_image, n_tiles_total, n_tiles_failed). A failed tile is
-    left blank/white in the mosaic — the caller decides how to react to a
-    high failure count (see fetch_all_pages)."""
+                  tile_px=256, workers=4, tile_cache=True):
+    """Returns (mosaic_image, n_tiles_total, n_tiles_failed, n_tiles_cached).
+    A failed tile is left blank/white in the mosaic — the caller decides how
+    to react to a high failure count (see fetch_all_pages)."""
     cols, rows = x1 - x0, y1 - y0
     mosaic = Image.new("RGB", (cols * tile_px, rows * tile_px), "white")
     tasks = [(x, y) for x in range(x0, x1) for y in range(y0, y1)]
 
     def worker(xy):
         x, y = xy
-        img = fetch_tile(session, provider, zoom, x, y, style=style, api_key=api_key)
-        return (x, y, img)
+        path = tile_cache_path(provider, zoom, x, y, style) if tile_cache else None
+        img = read_cached_tile(path) if path else None
+        if img is not None:
+            return (x, y, img, True)
+        img = fetch_tile(session, provider, zoom, x, y, style=style, api_key=api_key, save_to=path)
+        return (x, y, img, False)
 
-    n_failed = 0
+    n_failed = n_cached = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for x, y, img in pool.map(worker, tasks):
+        for x, y, img, cached in pool.map(worker, tasks):
             if img is not None:
                 mosaic.paste(img, ((x - x0) * tile_px, (y - y0) * tile_px))
+                n_cached += cached
             else:
                 n_failed += 1
-    return mosaic, len(tasks), n_failed
+    return mosaic, len(tasks), n_failed, n_cached
 
 
 def parse_splits(text):
@@ -342,7 +384,8 @@ class BasemapFetchError(RuntimeError):
 
 def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
                      verbose=True, max_failed_fraction=0.5,
-                     provider=None, api_key=None, style_id=None, on_page=None, splits=None):
+                     provider=None, api_key=None, style_id=None, on_page=None, splits=None,
+                     tile_cache=True):
     """Fetch+stitch the basemap mosaic for every page and write
     pageN_raw.jpg + bounds.json + provider.json into out_dir. Returns the
     bounds dict. This is the single implementation used by both the CLI
@@ -358,6 +401,9 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
 
     `on_page`, if given, is called as on_page(page, n_pages) after each
     page's mosaic is saved (progress reporting for the web app).
+
+    `tile_cache` reads/writes the persistent tile cache (TILE_CACHE_DIR);
+    False always downloads and stores nothing.
 
     Raises BasemapFetchError if more than `max_failed_fraction` of tiles on
     any page failed to download (most commonly: no internet access, or a
@@ -390,9 +436,10 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
             print(f"Page {p}: {provider} zoom {zoom}, {n_tiles} tiles "
                   f"({box['d0']:.1f}-{box['d1']:.1f} km) ...", end=" ", flush=True)
 
-        mosaic, n_total, n_failed = build_mosaic(session, provider, zoom, x0, x1, y0, y1,
-                                                  style=style, api_key=api_key,
-                                                  tile_px=tile_px, workers=workers)
+        mosaic, n_total, n_failed, n_cached = build_mosaic(session, provider, zoom, x0, x1, y0, y1,
+                                                            style=style, api_key=api_key,
+                                                            tile_px=tile_px, workers=workers,
+                                                            tile_cache=tile_cache)
 
         if n_total > 0 and n_failed / n_total > max_failed_fraction:
             raise BasemapFetchError(
@@ -411,7 +458,8 @@ def fetch_all_pages(data, out_dir, n_pages=4, zoom=13, pad_deg=0.02, workers=4,
                              split="custom" if splits else "equal")
         if verbose:
             warn = f" ({n_failed} tile(s) failed)" if n_failed else ""
-            print(f"-> {img_path.name} ({mosaic.width}x{mosaic.height}px){warn}")
+            hits = f", {n_cached} from cache" if n_cached else ""
+            print(f"-> {img_path.name} ({mosaic.width}x{mosaic.height}px{hits}){warn}")
         if on_page:
             on_page(p, len(boxes))
 
@@ -454,6 +502,9 @@ def main():
     ap.add_argument("--pad-deg", type=float, default=0.02, help="Lat/lon padding around each page's track (default: 0.02)")
     ap.add_argument("--workers", type=int, default=4, help="Concurrent tile downloads (keep modest, default: 4)")
     ap.add_argument("--out-dir", default=None, help="Output folder (default: work/<slug>_basemaps)")
+    ap.add_argument("--no-tile-cache", dest="tile_cache", action="store_false",
+                     help=f"Download every tile again and cache nothing (default: reuse tiles "
+                          f"under work/tiles/ younger than {TILE_CACHE_MAX_AGE_DAYS} days)")
     args = ap.parse_args()
     args.provider = args.provider or default_provider()
 
@@ -469,7 +520,7 @@ def main():
     fetch_all_pages(data, out_dir, n_pages=args.pages, zoom=args.zoom,
                      pad_deg=args.pad_deg, workers=args.workers,
                      provider=args.provider, api_key=args.api_key, style_id=style_id,
-                     splits=args.splits)
+                     splits=args.splits, tile_cache=args.tile_cache)
 
     attribution = PROVIDERS[args.provider]["attribution"]
     print(f"\nSaved basemap mosaics + bounds -> {out_dir}")
