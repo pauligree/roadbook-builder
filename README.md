@@ -341,6 +341,16 @@ name, so on a loop course you can hide one passage of a point and keep the
 other. Web app: untick it in the *Waypoints* list under Options (saved per
 track, like custom splits and moved labels); *Show all* brings them back.
 
+### Track simplification (`--simplify-m`)
+
+Some GPX files carry a point every metre or two. `--simplify-m 10` thins
+the track with Douglas-Peucker: a point is dropped when leaving it out
+moves the line by less than 10 m, sideways on the map or in height on the
+profile (so summits and cols stay). Only the drawn line changes — the kept
+points keep their original km, and distances, D+/D- (headers, tables, the
+cumulative D+ line) still come from every GPX point. Web app: *Track
+simplification* slider (0 = off), with the resulting point count below it.
+
 ### Style file (`--style`)
 
 Label font, line widths, colour scale and hand-placed label positions can

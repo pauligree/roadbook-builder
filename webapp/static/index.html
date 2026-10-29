@@ -152,6 +152,13 @@
           <input name="waypoint_radius_m" type="range" min="10" max="300" step="10" value="60">
         </label>
 
+        <label class="field">
+          <span>Track simplification <output id="simplifyOut">off</output></span>
+          <input name="simplify_m" type="range" min="0" max="50" step="1" value="0">
+          <small id="simplifyNote" class="note">Fewer points for over-detailed GPX: drops points that
+            move the line by less than this, on the map or in height. Km and D+/D- stay exact.</small>
+        </label>
+
         <div id="poiField" class="field" hidden>
           <span class="label-row">Waypoints</span>
           <small class="note">Untick to leave a point out: not on the map, the profile or the

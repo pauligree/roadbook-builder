@@ -88,6 +88,40 @@ def hide_pois(data, hidden_kms, near_km=0.3):
     return (dict(data, pois=pois) if hidden else data), sorted(hidden)
 
 
+def simplify_track(data, tol_m):
+    """Fewer track points: Douglas-Peucker keeping every point that would
+    otherwise be off by more than tol_m, sideways on the map or in height
+    on the profile (so summits and cols stay). Only the drawn geometry
+    changes: kept points keep their original km, and data["full"] holds
+    the full-resolution eles/dist for D+/D- and the other stats."""
+    lats, lons, eles, dist = data["lats"], data["lons"], data["eles"], data["dist"]
+    if not tol_m or len(lats) < 3:
+        return data
+    x = np.radians(lons - lons[0]) * EARTH_RADIUS_M * math.cos(math.radians(lats[0]))
+    y = np.radians(lats - lats[0]) * EARTH_RADIUS_M
+    keep = np.zeros(len(lats), bool)
+    keep[[0, -1]] = True
+    stack = [(0, len(lats) - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2:
+            continue
+        i = np.arange(a + 1, b)
+        dx, dy = x[b] - x[a], y[b] - y[a]
+        seg2 = dx * dx + dy * dy
+        t = np.clip(((x[i] - x[a]) * dx + (y[i] - y[a]) * dy) / seg2, 0, 1) if seg2 else 0.0
+        side = np.hypot(x[i] - x[a] - t * dx, y[i] - y[a] - t * dy)
+        span = dist[b] - dist[a]
+        up = np.abs(eles[i] - (eles[a] + (eles[b] - eles[a]) * ((dist[i] - dist[a]) / span if span else 0.0)))
+        err = np.maximum(side, up)
+        k = int(np.argmax(err))
+        if err[k] > tol_m:
+            keep[a + 1 + k] = True
+            stack += [(a, a + 1 + k), (a + 1 + k, b)]
+    full = data.get("full") or dict(eles=eles, dist=dist)
+    return dict(data, lats=lats[keep], lons=lons[keep], eles=eles[keep], dist=dist[keep], full=full)
+
+
 def parse_gpx(gpx_path: Path, waypoint_radius_m: float = 60.0):
     with open(gpx_path, encoding="utf-8") as f:
         gpx = gpxpy.parse(f)

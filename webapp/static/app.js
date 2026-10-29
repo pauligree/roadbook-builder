@@ -31,7 +31,7 @@ function readOptions(file = state.file) {
   const o = {};
   for (const [k, v] of new FormData(form).entries()) if (!isStyleField(k)) o[k] = v;
   o.pages = +form.elements.pages.value;  // read directly: disabled fields skip FormData
-  o.zoom = +o.zoom; o.waypoint_radius_m = +o.waypoint_radius_m; o.overlap_km = +o.overlap_km;
+  o.zoom = +o.zoom; o.waypoint_radius_m = +o.waypoint_radius_m; o.simplify_m = +o.simplify_m; o.overlap_km = +o.overlap_km;
   o.same_scale = form.elements.same_scale.checked;
   o.print_scale = +o.print_scale || null;
   o.saturation = +o.saturation; o.lighten = +o.lighten; o.hillshade = +o.hillshade;
@@ -285,6 +285,7 @@ function syncOptionLabels() {
   $("pagesOut").textContent = (o.splits || o.print_scale) && state.data ? state.data.n_pages : o.pages;
   $("zoomOut").textContent = o.zoom;
   $("radiusOut").textContent = o.waypoint_radius_m;
+  $("simplifyOut").textContent = o.simplify_m ? `${o.simplify_m} m` : "off";
   $("overlapOut").textContent = o.overlap_km;
   $("saturationOut").textContent = Math.round(o.saturation * 100);
   $("lightenOut").textContent = Math.round(o.lighten * 100);
@@ -486,6 +487,12 @@ function updateNotes() {
     pn.textContent = `≈ ${(d.stats.total_km / d.n_pages).toFixed(1)} km per page`;
     pn.className = "note";
   }
+  const sn = $("simplifyNote"), s = d.stats;
+  sn.dataset.text ??= sn.textContent;
+  sn.textContent = s.points_full && s.points < s.points_full
+    ? `${s.points.toLocaleString("en")} of ${s.points_full.toLocaleString("en")} track points ` +
+      `(${Math.round(100 * s.points / s.points_full)} %). Km and D+/D- stay exact.`
+    : `${s.points.toLocaleString("en")} track points. ` + sn.dataset.text;
   const pg = d.pages[state.page];
   const ppi = pg ? Math.round(mosaicPx(pg.bounds, o.zoom, d.tile_px).w / mapBox(pg).w) : 0;
   const zn = $("zoomNote");

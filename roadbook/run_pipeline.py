@@ -87,12 +87,15 @@ def process_one(gpx_path: Path, args, out_override: Path = None, progress=None) 
     progress(1, f"Parsing {gpx_path.name}")
     data = parse_gpx.parse_gpx(gpx_path, waypoint_radius_m=args.waypoint_radius_m)
     data, hidden = parse_gpx.hide_pois(data, getattr(args, "hidden_pois", None))
+    data = parse_gpx.simplify_track(data, getattr(args, "simplify_m", 0))
     data_pkl = WORK_DIR / f"{slug}_data.pkl"
     with open(data_pkl, "wb") as f:
         pickle.dump(data, f)
     print(f"  {data['race_title']} — sector {data['sector_code']}: {data['start_name']} -> {data['end_name']}")
     print(f"  {data['total_dist_km']:.2f} km | D+ {data['gain']:.0f} m | D- {data['loss']:.0f} m | "
           f"{len(data['pois'])} waypoints matched" + (f", {len(hidden)} hidden" if hidden else ""))
+    if "full" in data:
+        print(f"  track simplified to {len(data['lats'])} of {len(data['full']['eles'])} points")
 
     splits = getattr(args, "splits", None)
     n_pages = effective_pages(gpx_path, args, data["total_dist_km"])
@@ -194,6 +197,10 @@ def main():
                      metavar="KM,KM",
                      help="Leave out the waypoints nearest to these km (e.g. 4.3,15.5): not drawn, "
                           "not in the tables, and legs are measured across them")
+    ap.add_argument("--simplify-m", type=float, default=0.0, metavar="M",
+                     help="Draw the track with fewer points: drop points that move the line by less "
+                          "than M metres, on the map or in height (0 = all GPX points). Distances "
+                          "and D+/D- still come from the full track.")
     ap.add_argument("--tile-workers", type=int, default=4)
     ap.add_argument("--overlap-km", type=float, default=fetch_basemap.OVERLAP_KM,
                      help="Track shown (faded) beyond each page's ends, in km (0 = none)")

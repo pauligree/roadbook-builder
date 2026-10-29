@@ -26,7 +26,8 @@ import numpy as np
 from roadbook import fetch_basemap, layout, parse_gpx, run_pipeline
 from roadbook.render_pages import (
     GRADIENT_COLORS, GRADIENT_VMAX_CLIP, HEIGHT_RATIOS, PAGE_SIZE_IN,
-    build_sheets, clean_name, compute_gradient, cumulative_gain, page_subtitle, table_header,
+    build_sheets, clean_name, full_track, page_subtitle, segment_stats, table_header,
+    track_cum_gain, track_gradient,
 )
 
 PREVIEW_MAX_POINTS = 3000
@@ -95,6 +96,7 @@ class RenderOptions:
     part_tables: bool = True  # waypoint-table page after each map page
     final_table: bool = True  # final waypoint table of all points
     waypoint_radius_m: float = 60.0
+    simplify_m: float = 0.0  # track point reduction tolerance, 0 = every GPX point
     overlap_km: float = fetch_basemap.OVERLAP_KM  # neighbouring track shown faded on each map
     same_scale: bool = False  # every map page at the largest page's scale
     print_scale: int | None = None  # fixed 1:N; page count then follows from the track
@@ -112,6 +114,7 @@ class RenderOptions:
         opts.pages = max(1, min(int(opts.pages), 20))
         opts.zoom = max(8, min(int(opts.zoom), 17))
         opts.waypoint_radius_m = max(1.0, float(opts.waypoint_radius_m))
+        opts.simplify_m = max(0.0, min(float(opts.simplify_m), 100.0))
         opts.overlap_km = max(0.0, min(float(opts.overlap_km), 5.0))
         opts.same_scale = bool(opts.same_scale)
         opts.print_scale = max(5000, min(int(opts.print_scale), 500000)) if opts.print_scale else None
@@ -140,7 +143,7 @@ class RenderOptions:
             part_tables=d["part_tables"], final_table=d["final_table"],
             overlap_km=d["overlap_km"], same_scale=d["same_scale"], print_scale=d["print_scale"],
             saturation=d["saturation"], lighten=d["lighten"], hillshade=d["hillshade"],
-            hidden_pois=d["hidden_pois"],
+            hidden_pois=d["hidden_pois"], simplify_m=d["simplify_m"],
         )
 
 
@@ -149,12 +152,14 @@ class RenderOptions:
 _parse_cache = {}
 
 
-def _parsed(gpx_path: Path, radius_m: float):
-    key = (str(gpx_path), gpx_path.stat().st_mtime, radius_m)
+def _parsed(gpx_path: Path, radius_m: float, simplify_m: float = 0.0):
+    key = (str(gpx_path), gpx_path.stat().st_mtime, radius_m, simplify_m)
     if key not in _parse_cache:
         if len(_parse_cache) > 16:
             _parse_cache.clear()
-        _parse_cache[key] = parse_gpx.parse_gpx(gpx_path, waypoint_radius_m=radius_m)
+        data = (_parsed(gpx_path, radius_m) if simplify_m
+                else parse_gpx.parse_gpx(gpx_path, waypoint_radius_m=radius_m))
+        _parse_cache[key] = parse_gpx.simplify_track(data, simplify_m)
     return _parse_cache[key]
 
 
@@ -175,13 +180,14 @@ def ground_scale(box):
 
 def analyze(gpx_path, opts: RenderOptions):
     gpx_path = Path(gpx_path)
-    data, hidden = parse_gpx.hide_pois(_parsed(gpx_path, opts.waypoint_radius_m), opts.hidden_pois)
+    data, hidden = parse_gpx.hide_pois(_parsed(gpx_path, opts.waypoint_radius_m, opts.simplify_m),
+                                       opts.hidden_pois)
     n_pages = run_pipeline.effective_pages(gpx_path, opts.as_args(), data["total_dist_km"])
     provider = fetch_basemap.PROVIDERS[opts.provider]
 
     lats, lons, eles, dist = data["lats"], data["lons"], data["eles"], data["dist"]
     dist_km = dist / 1000.0
-    grad = compute_gradient(eles, dist)
+    grad = track_gradient(data)
     grad_vmax = float(np.clip(np.percentile(np.abs(grad), 97), *GRADIENT_VMAX_CLIP))
     grad_pt = np.append(grad, grad[-1] if len(grad) else 0.0)  # one value per point
 
@@ -201,9 +207,7 @@ def analyze(gpx_path, opts: RenderOptions):
     pages = []
     for box in boxes:
         d0, d1 = box["d0"], box["d1"]
-        m = (dist_km >= d0 - 0.1) & (dist_km <= d1 + 0.1)
-        seg_ele = eles[m]
-        d_ele = np.diff(seg_ele)
+        length_km, gain, loss, min_ele, max_ele = segment_stats(data, d0, d1)
         pages.append(dict(
             page=box["page"], d0=d0, d1=d1, overlap_km=box["overlap_km"],
             scale=round(ground_scale(box)), fits=box.get("fits", True),
@@ -211,9 +215,7 @@ def analyze(gpx_path, opts: RenderOptions):
             subtitle=page_subtitle(d0, d1, bool(opts.splits), [(p["km"], p["name"]) for p in pois],
                                    data["total_dist_km"],
                                    data["start_name"], data["end_name"]),
-            length_km=float(dist_km[m][-1] - dist_km[m][0]),
-            gain=float(d_ele[d_ele > 0].sum()), loss=float(-d_ele[d_ele < 0].sum()),
-            min_ele=float(seg_ele.min()), max_ele=float(seg_ele.max()),
+            length_km=length_km, gain=gain, loss=loss, min_ele=min_ele, max_ele=max_ele,
             poi_count=sum(1 for p in pois if d0 - 0.05 <= p["km"] <= d1 + 0.05),
         ))
 
@@ -239,6 +241,7 @@ def analyze(gpx_path, opts: RenderOptions):
         stats=dict(
             total_km=float(data["total_dist_km"]), gain=data["gain"], loss=data["loss"],
             min_ele=data["min_ele"], max_ele=data["max_ele"], points=int(len(lats)),
+            points_full=int(len(full_track(data)[0])),
         ),
         n_pages=n_pages,
         pages_forced_single=not opts.splits and not opts.print_scale and n_pages != opts.pages,
@@ -248,7 +251,7 @@ def analyze(gpx_path, opts: RenderOptions):
             lat=np.round(lats[idx], 6).tolist(), lon=np.round(lons[idx], 6).tolist(),
             ele=np.round(eles[idx], 1).tolist(), km=np.round(dist_km[idx], 4).tolist(),
             grade=np.round(grade_ds, 2).tolist(),
-            cum_up=np.round(cumulative_gain(eles)[idx], 1).tolist(),  # full-resolution D+ sums
+            cum_up=np.round(track_cum_gain(data)[idx], 1).tolist(),  # full-resolution D+ sums
         ),
         pois=pois,
         hidden_pois=[dict(km=km, name=clean_name(name)) for (km, name, _lat, _lon, _ele) in hidden],

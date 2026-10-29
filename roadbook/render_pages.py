@@ -184,8 +184,20 @@ def cumulative_gain(eles):
     return np.r_[0.0, np.cumsum(np.clip(np.diff(eles), 0, None))]
 
 
-def compute_gradient(eles, dist):
-    window = GRADIENT_SMOOTH_WINDOW
+def full_track(data):
+    """(eles, dist) at full GPX resolution, also after parse_gpx.simplify_track:
+    D+/D- and the other stats always come from these."""
+    full = data.get("full") or data
+    return full["eles"], full["dist"]
+
+
+def track_cum_gain(data):
+    """cumulative_gain() of the full track, at the (maybe simplified) drawn points."""
+    eles, dist = full_track(data)
+    return np.interp(data["dist"], dist, cumulative_gain(eles))
+
+
+def compute_gradient(eles, dist, window=GRADIENT_SMOOTH_WINDOW):
     pad = window // 2
     padded = np.pad(eles, (pad, pad), mode="edge")
     smoothed = np.convolve(padded, np.ones(window) / window, mode="valid")[: len(eles)]
@@ -194,6 +206,13 @@ def compute_gradient(eles, dist):
     with np.errstate(divide="ignore", invalid="ignore"):
         grad = np.where(d_dist_m > 1, d_ele_s / d_dist_m * 100.0, 0.0)
     return grad
+
+
+def track_gradient(data):
+    """% grade per drawn segment. A simplified track is already smooth and
+    its points are far apart, so the point-count window would blur
+    kilometres of it: no extra smoothing there."""
+    return compute_gradient(data["eles"], data["dist"], window=1 if "full" in data else GRADIENT_SMOOTH_WINDOW)
 
 
 def build_page(mode, page, ctx):
@@ -223,11 +242,7 @@ def build_page(mode, page, ctx):
     seg_dist = dist_km[idx]
     seg_grad = grad_all[idx[:-1]]
 
-    d_ele = np.diff(seg_ele)
-    seg_gain = float(d_ele[d_ele > 0].sum())
-    seg_loss = float(-d_ele[d_ele < 0].sum())
-    seg_min, seg_max = float(seg_ele.min()), float(seg_ele.max())
-    seg_len = float(seg_dist[-1] - seg_dist[0])
+    seg_len, seg_gain, seg_loss, seg_min, seg_max = segment_stats(d, d0, d1)
 
     page_pois = [p for p in pois_all if d0 - 0.05 <= p[0] <= d1 + 0.05]
     page_pois.sort(key=lambda p: p[0])
@@ -666,9 +681,10 @@ def waypoint_table(data, pois, extra=()):
     points — page start/end rows, flagged boundary=True — unless a point
     already sits within 0.3 km. D+/D- are raw elevation-difference sums,
     the same as the header stats."""
-    dist_km = data["dist"] / 1000.0
+    eles, dist = full_track(data)
+    dist_km = dist / 1000.0
     total = float(data["total_dist_km"])
-    d_ele = np.diff(data["eles"])
+    d_ele = np.diff(eles)
     cum_up = np.concatenate([[0.0], np.cumsum(np.clip(d_ele, 0, None))])
     cum_down = np.concatenate([[0.0], np.cumsum(np.clip(-d_ele, 0, None))])
 
@@ -737,9 +753,10 @@ def build_sheets(data, pois, edges, part_tables=True, final_table=True):
 def segment_stats(data, d0, d1):
     """(length km, D+, D-, min ele, max ele) of the track between d0 and d1
     km — the same slice and sums a map page's header uses."""
-    dist_km = data["dist"] / 1000.0
+    eles, dist = full_track(data)
+    dist_km = dist / 1000.0
     m = (dist_km >= d0 - 0.1) & (dist_km <= d1 + 0.1)
-    seg_ele, seg_dist = data["eles"][m], dist_km[m]
+    seg_ele, seg_dist = eles[m], dist_km[m]
     d_ele = np.diff(seg_ele)
     return (float(seg_dist[-1] - seg_dist[0]), float(d_ele[d_ele > 0].sum()), float(-d_ele[d_ele < 0].sum()),
             float(seg_ele.min()), float(seg_ele.max()))
@@ -874,7 +891,7 @@ def main():
 
     pois_all = [(km, clean_name(name), plat, plon, pele) for (km, name, plat, plon, pele) in data["pois"]]
 
-    grad_all = compute_gradient(data["eles"], data["dist"])
+    grad_all = track_gradient(data)
     style = load_style(args.style)
     if style["grade_max"]:
         grad_vmax = float(style["grade_max"])
@@ -903,7 +920,7 @@ def main():
                             final_table=not (args.no_tables or args.no_final_table)),
         cmap=cmap, norm=norm, basemap_bounds=basemap_bounds, basemap_imgs=basemap_imgs,
         profile_ele=smooth_elevation(data["dist"], data["eles"], style["profile_smooth_m"]),
-        cum_gain=cumulative_gain(data["eles"]),
+        cum_gain=track_cum_gain(data),
         race_title=args.race_title or data.get("race_title", "Roadbook"),
         pois_all=pois_all, attribution=attribution, style=style,
     )
