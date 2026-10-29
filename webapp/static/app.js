@@ -76,13 +76,14 @@ function renderPoiList() {
   const d = state.data;
   $("poiField").hidden = !d;
   if (!d) return;
-  const all = [...d.pois.map((p) => ({ ...p, on: true })), ...d.hidden_pois.map((p) => ({ ...p, on: false }))]
+  const hidden = d.hidden_pois || [];  // absent from a server started before this feature
+  const all = [...d.pois.map((p) => ({ ...p, on: true })), ...hidden.map((p) => ({ ...p, on: false }))]
     .sort((a, b) => a.km - b.km);
   $("poiList").innerHTML = all.length ? all.map((p) =>
     `<label${p.on ? "" : ' class="off"'}><input type="checkbox" data-km="${p.km}"${p.on ? " checked" : ""}>` +
     `<span class="km">${p.km.toFixed(1)} km</span><span>${escapeHtml(p.name)}</span></label>`).join("")
     : `<small class="note">No waypoints on this track.</small>`;
-  const n = d.hidden_pois.length;
+  const n = hidden.length;
   $("poiNote").textContent = n ? `${n} hidden on this track` : "";
   $("poiShowAll").disabled = !n;
 }
