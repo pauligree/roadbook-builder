@@ -69,6 +69,73 @@ def guess_title_from_filename(gpx_path: Path):
     )
 
 
+# D+/D- smoothing, as gpx.studio computes it (gpx-rs/src/core/statistics/
+# compute.rs, MIT): the profile's turning points (summits, cols, valley
+# floors) are found with Douglas-Peucker on (distance m, elevation m) and keep
+# their real elevation; between two of them every point is averaged with the
+# points within ELE_SMOOTH_WINDOW_M of track distance. D+/D- are then the sums
+# of the smoothed rises and drops. Unlike a raw sum it doesn't grow with GPS
+# noise, and unlike a per-step threshold it doesn't drop the gentle climbs of
+# a densely sampled track.
+ELE_EXTREMA_TOL_M = 20.0
+ELE_SMOOTH_WINDOW_M = 100.0
+
+
+def elevation_extremas(dist, eles, tol_m=ELE_EXTREMA_TOL_M):
+    """Indices kept by Douglas-Peucker on the profile (distance and
+    elevation, both in m), first and last included. As in gpx.studio: the
+    distance of a point to the chord is measured to the closest point of the
+    segment, the first farthest point wins a tie, and a point is kept only
+    when strictly farther than tol_m."""
+    n = len(eles)
+    if n < 3:
+        return np.arange(n)
+    keep = np.zeros(n, bool)
+    keep[[0, -1]] = True
+    stack = [(0, n - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2:
+            continue
+        i = np.arange(a + 1, b)
+        dx, dy = dist[b] - dist[a], eles[b] - eles[a]
+        seg2 = dx * dx + dy * dy
+        t = np.clip(((dist[i] - dist[a]) * dx + (eles[i] - eles[a]) * dy) / seg2, 0, 1) if seg2 else 0.0
+        err = np.hypot(dist[i] - (dist[a] + t * dx), eles[i] - (eles[a] + t * dy))
+        k = int(np.argmax(err))
+        if err[k] > tol_m:
+            keep[a + 1 + k] = True
+            stack += [(a, a + 1 + k), (a + 1 + k, b)]
+    return np.flatnonzero(keep)
+
+
+def smoothed_elevation(dist, eles, window_m=ELE_SMOOTH_WINDOW_M, tol_m=ELE_EXTREMA_TOL_M):
+    """The elevation profile D+/D- are summed on, see ELE_SMOOTH_WINDOW_M.
+    Same windows as gpx.studio: on the left they stop at the previous
+    turning point, on the right they may run past the next one; they always
+    take at least the neighbouring point on each side."""
+    eles = np.asarray(eles, float)
+    n = len(eles)
+    if n < 3:
+        return eles
+    ext = elevation_extremas(dist, eles, tol_m)
+    idx = np.arange(n)
+    seg_start = ext[np.searchsorted(ext, idx, side="right") - 1]
+    left = np.maximum(seg_start, np.minimum(idx - 1, np.searchsorted(dist, dist - window_m, side="left")))
+    right = np.minimum(n - 1, np.maximum(idx + 1, np.searchsorted(dist, dist + window_m, side="right") - 1))
+    cs = np.r_[0.0, np.cumsum(eles)]
+    smoothed = (cs[right + 1] - cs[left]) / (right - left + 1)
+    smoothed[ext] = eles[ext]
+    return smoothed
+
+
+def cumulative_gain_loss(dist, eles):
+    """(D+, D-) from the start at every track point, on smoothed_elevation()."""
+    d_ele = np.diff(smoothed_elevation(dist, eles))
+    return (np.r_[0.0, np.cumsum(np.clip(d_ele, 0, None))],
+            np.r_[0.0, np.cumsum(np.clip(-d_ele, 0, None))])
+
+
 def hide_pois(data, hidden_kms, near_km=0.3):
     """`data` without the waypoints the user switched off, plus the removed
     ones. Each km in `hidden_kms` removes the waypoint nearest to it (if
@@ -141,9 +208,8 @@ def parse_gpx(gpx_path: Path, waypoint_radius_m: float = 60.0):
     eles = np.array([p.elevation if p.elevation is not None else 0.0 for p in points])
     dist = cumulative_distance(lats, lons)
 
-    d_ele = np.diff(eles)
-    gain = float(d_ele[d_ele > 0].sum())
-    loss = float(-d_ele[d_ele < 0].sum())
+    cum_up, cum_down = cumulative_gain_loss(dist, eles)
+    gain, loss = float(cum_up[-1]), float(cum_down[-1])
 
     # Match GPX waypoints onto the track (keep only those actually near it —
     # handles GPX files that ship POIs for an entire multi-stage race).
