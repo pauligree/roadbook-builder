@@ -325,10 +325,25 @@ Columns: point name, km from start, km / D+ / D- from the previous point,
 D+ / D- to the next point, D+ / D- from the start. Rows are the GPX
 waypoints plus track start and finish; "previous" and "next" run along the
 whole track, also across part breaks. D+/D- use the same elevation sums as
-the header stats. A list longer than ~74 points continues on another page.
+the header stats (see *D+ / D-* below). A list longer than ~74 points
+continues on another page.
 Table pages carry no basemap. Web app: two checkboxes under Options; in
 *Page layout*, ‹ › step through every page in print order and the
 *All points* chip jumps to the final table.
+
+### D+ / D-
+
+Elevation gain and loss (header stats, waypoint tables, cumulative D+ on the
+profile) are computed as [gpx.studio](https://github.com/gpxstudio/gpx.studio)
+does (`gpx-rs/src/core/statistics/compute.rs`, MIT): the profile's turning
+points (summits, cols, valley floors) are found with Douglas-Peucker on
+distance/elevation at 20 m and keep their real elevation; between two of them
+each point is averaged with the points within 100 m of track distance; D+ / D-
+are the sums of the smoothed rises and drops. A raw sum of every elevation
+step grows with GPS noise, and a per-step threshold (e.g. "ignore steps under
+1 m") loses the gentle climbs of a densely sampled track; this stays stable
+with both. Constants: `ELE_EXTREMA_TOL_M`, `ELE_SMOOTH_WINDOW_M` in
+`roadbook/parse_gpx.py`.
 
 ### Hiding waypoints (`--hide-waypoints`)
 
@@ -391,9 +406,10 @@ each map turns into the matching legend, with the class edges labelled.
 Web app: *Colour steps* under Style.
 
 `profile_smooth_m` draws the elevation profile as a moving average over
-that many metres of track, ironing out GPS/DEM jitter (stats and tables
-keep the raw values). `profile_cum_gain` adds a dashed line of D+ from the
-start on a right-hand axis of the profile. Web app: *Profile smoothing* and
+that many metres of track, ironing out GPS/DEM jitter (only the drawn
+line: stats and tables keep their own D+ / D- smoothing, see *D+ / D-*
+above). `profile_cum_gain` adds a dashed line of D+ from the start on a
+right-hand axis of the profile. Web app: *Profile smoothing* and
 *Cumulative D+ on the profile* under Style.
 
 ## 5. Using the output

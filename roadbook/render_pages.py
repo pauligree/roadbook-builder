@@ -53,6 +53,7 @@ from roadbook.layout import (GRID, HEIGHT_RATIOS, PAGE_SIZE_IN, TABLE_FONT_PT, T
                              TABLE_ROW_IN, table_rows_per_page)
 
 from roadbook.config import WORK_DIR
+from roadbook.parse_gpx import cumulative_gain_loss
 
 # ---- styling knobs -----------------------------------------------------
 GRADIENT_SMOOTH_WINDOW = 11          # points, rolling average before computing % grade
@@ -169,19 +170,14 @@ def binned_scale(cmap, bins):
 
 def smooth_elevation(dist_m, eles, window_m):
     """Moving average of `eles` over +-window_m/2 of track distance — evens
-    out GPS/DEM jitter in the drawn profile. Stats and tables keep the raw
-    values."""
+    out GPS/DEM jitter in the drawn profile. Stats and tables don't use it
+    (their D+/D- have their own smoothing, parse_gpx.cumulative_gain_loss)."""
     if not window_m or window_m <= 0:
         return eles
     cs = np.r_[0.0, np.cumsum(eles)]
     lo = np.searchsorted(dist_m, dist_m - window_m / 2, side="left")
     hi = np.searchsorted(dist_m, dist_m + window_m / 2, side="right")
     return (cs[hi] - cs[lo]) / (hi - lo)
-
-
-def cumulative_gain(eles):
-    """D+ from the start at every track point (same raw sums as the stats)."""
-    return np.r_[0.0, np.cumsum(np.clip(np.diff(eles), 0, None))]
 
 
 def full_track(data):
@@ -191,10 +187,16 @@ def full_track(data):
     return full["eles"], full["dist"]
 
 
-def track_cum_gain(data):
-    """cumulative_gain() of the full track, at the (maybe simplified) drawn points."""
+def full_gain_loss(data):
+    """(D+, D-) from the start at every full-resolution point (smoothed as in
+    parse_gpx.cumulative_gain_loss, the same sums as the header stats)."""
     eles, dist = full_track(data)
-    return np.interp(data["dist"], dist, cumulative_gain(eles))
+    return cumulative_gain_loss(dist, eles)
+
+
+def track_cum_gain(data):
+    """D+ from the start of the full track, at the (maybe simplified) drawn points."""
+    return np.interp(data["dist"], full_track(data)[1], full_gain_loss(data)[0])
 
 
 def compute_gradient(eles, dist, window=GRADIENT_SMOOTH_WINDOW):
@@ -679,14 +681,11 @@ def waypoint_table(data, pois, extra=()):
     previous and next point and from the start. "Previous" and "next" run
     along the whole track, also across page breaks. `extra` adds (km, name)
     points — page start/end rows, flagged boundary=True — unless a point
-    already sits within 0.3 km. D+/D- are raw elevation-difference sums,
-    the same as the header stats."""
-    eles, dist = full_track(data)
-    dist_km = dist / 1000.0
+    already sits within 0.3 km. D+/D- are the smoothed sums of
+    full_gain_loss(), the same as the header stats."""
+    dist_km = full_track(data)[1] / 1000.0
     total = float(data["total_dist_km"])
-    d_ele = np.diff(eles)
-    cum_up = np.concatenate([[0.0], np.cumsum(np.clip(d_ele, 0, None))])
-    cum_down = np.concatenate([[0.0], np.cumsum(np.clip(-d_ele, 0, None))])
+    cum_up, cum_down = full_gain_loss(data)
 
     # a waypoint at the very start/finish *is* that end of the track
     points = [(0.0 if p[0] <= 0.3 else total if p[0] >= total - 0.3 else float(p[0]), p[1], False)
@@ -757,8 +756,8 @@ def segment_stats(data, d0, d1):
     dist_km = dist / 1000.0
     m = (dist_km >= d0 - 0.1) & (dist_km <= d1 + 0.1)
     seg_ele, seg_dist = eles[m], dist_km[m]
-    d_ele = np.diff(seg_ele)
-    return (float(seg_dist[-1] - seg_dist[0]), float(d_ele[d_ele > 0].sum()), float(-d_ele[d_ele < 0].sum()),
+    seg_up, seg_down = (c[m] for c in full_gain_loss(data))
+    return (float(seg_dist[-1] - seg_dist[0]), float(seg_up[-1] - seg_up[0]), float(seg_down[-1] - seg_down[0]),
             float(seg_ele.min()), float(seg_ele.max()))
 
 
